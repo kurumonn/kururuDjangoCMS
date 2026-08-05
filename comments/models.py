@@ -12,21 +12,45 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 
 from django.conf import settings
 from django.db import models
 
 
-def hash_ip(ip: str | None) -> str:
-    """IP アドレスをハッシュ化する。
+def _ip_hash_key() -> bytes:
+    """IP ハッシュ専用の鍵を返す。
 
-    SECRET_KEY を混ぜるため、DB だけが漏れても元の IP は復元しにくい。
-    完全な匿名化ではないが、生の IP を並べておくよりはるかに安全。
+    SECRET_KEY をそのまま使わないのは、用途が違うため。
+    SECRET_KEY はセッションや署名で使うので、漏えい時には**必ず**
+    入れ替える。そのとき IP ハッシュまで一斉に変わると、
+    連投の検出やスパム対策の履歴が過去と繋がらなくなる。
+
+    鍵の寿命が違うものは、鍵を分ける。
+    """
+    key = getattr(settings, "COMMENT_IP_HASH_KEY", "") or settings.SECRET_KEY
+    return key.encode("utf-8")
+
+
+def hash_ip(ip: str | None) -> str:
+    """IP アドレスを鍵付きハッシュ（HMAC-SHA256）に変換する。
+
+    これは**匿名化ではなく、DB 単体が漏れた場合の緩和策**。
+    何ができて何ができないかを正確に書いておく。
+
+      * 鍵なしの SHA-256 だけなら、IPv4 は全部で約43億通りしかないので、
+        総当たりで元の IP を求められる。実質的に可逆。
+      * 鍵付き HMAC なら、鍵を持たない攻撃者は総当たりできない。
+        DB のダンプだけを手に入れた相手には有効。
+      * ただし**鍵も一緒に漏れれば、同じく総当たりできる**。
+        鍵は DB とは別の場所（環境変数）に置くことに意味がある。
+
+    連結（f"{key}:{ip}"）ではなく HMAC を使うのは、
+    鍵とデータの境界が曖昧にならないようにするため。
     """
     if not ip:
         return ""
-    salted = f"{settings.SECRET_KEY}:{ip}".encode("utf-8")
-    return hashlib.sha256(salted).hexdigest()
+    return hmac.new(_ip_hash_key(), ip.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 class CommentQuerySet(models.QuerySet):

@@ -28,8 +28,28 @@ ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 # 1ファイルあたりの上限（バイト）。
 MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5 MiB
 
-# 画像の最大寸法。極端に大きい画像は伸長時にメモリを食い尽くす
+# 画像の最大画素数。極端に大きい画像は伸長時にメモリを食い尽くす
 # （いわゆる decompression bomb）。
+#
+# ★この値を Image.MAX_IMAGE_PIXELS へ代入してはいけない★
+#
+# Image.MAX_IMAGE_PIXELS は Pillow というモジュール全体で共有される
+# ただの変数で、プロセス内の全リクエストから見える。
+# 「検証の間だけ書き換えて finally で戻す」という書き方は、
+# Gunicorn のスレッドワーカーのように**同じプロセスで複数の
+# リクエストを同時に処理する構成では成立しない**。
+#
+#   リクエストA: 50_000_000 に下げる
+#   リクエストB: 画像を開く          ← A の設定が効いてしまう
+#   リクエストA: 元の値に戻す
+#   リクエストB: 画像を開く          ← 今度は既定値に戻っている
+#
+# B の結果が A の進み具合で変わる。落ちるときと落ちないときがある、
+# という最も再現しにくい形の不具合になる。
+#
+# ここでは Pillow の既定値には触らず、開いた後に自分で
+# 幅×高さを検査する。共有されている値を書き換えないので、
+# 同時に何本走っていても結果が変わらない。
 MAX_IMAGE_PIXELS = 50_000_000  # 50 メガピクセル
 
 
@@ -89,9 +109,6 @@ def validate_image_upload(uploaded_file, *, max_size: int = MAX_UPLOAD_SIZE) -> 
     # 呼ばれたときに読むことで、Pillow 未導入でも他機能が動く。
     from PIL import Image, UnidentifiedImageError
 
-    # decompression bomb 対策。Pillow の既定より厳しくする。
-    original_limit = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
     try:
         payload = _read_all(uploaded_file)
 
@@ -103,25 +120,38 @@ def validate_image_upload(uploaded_file, *, max_size: int = MAX_UPLOAD_SIZE) -> 
             )
 
         try:
-            with Image.open(io.BytesIO(payload)) as image:
-                # verify() は壊れたファイルを検出するが、
-                # 実行後は画像を読み直す必要がある。
-                image.verify()
+            # まず開いて、寸法と形式だけを取る。
+            # Image.open() はヘッダーしか読まないので、この時点では
+            # 画素データを伸長していない。宣言された寸法は分かる。
             with Image.open(io.BytesIO(payload)) as image:
                 image_format = image.format
                 width, height = image.size
+
+            # ★伸長する前に画素数を検査する★
+            # ここを verify() より後ろに置くと、検査する前に
+            # 巨大な画像を読ませることになり、対策の意味が無くなる。
+            if width * height > MAX_IMAGE_PIXELS:
+                raise UploadValidationError(
+                    f"画像の画素数が大きすぎます"
+                    f"（{width}×{height}、上限 {MAX_IMAGE_PIXELS:,} 画素）。"
+                )
+
+            # 壊れたファイルの検出。verify() の後は画像を読み直す必要が
+            # あるので、開き直している。
+            with Image.open(io.BytesIO(payload)) as image:
+                image.verify()
         except UnidentifiedImageError as exc:
             raise UploadValidationError(
                 "画像として読み取れませんでした。拡張子だけを変えたファイルの可能性があります。"
             ) from exc
         except Image.DecompressionBombError as exc:
-            raise UploadValidationError(
-                "画像の画素数が大きすぎます。"
-            ) from exc
+            # Pillow 自身の既定値（この検証より緩い）に引っかかった場合。
+            # 上の自前検査で先に落ちるはずだが、Pillow 側の判定が
+            # 変わっても取りこぼさないよう残しておく。
+            raise UploadValidationError("画像の画素数が大きすぎます。") from exc
         except OSError as exc:
             raise UploadValidationError("壊れた画像ファイルです。") from exc
     finally:
-        Image.MAX_IMAGE_PIXELS = original_limit
         # 後続の保存処理のために先頭へ巻き戻す。
         if hasattr(uploaded_file, "seek"):
             uploaded_file.seek(0)

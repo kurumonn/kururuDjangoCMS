@@ -36,6 +36,16 @@ def require(name: str) -> str:
 
 SECRET_KEY = require("DJANGO_SECRET_KEY")
 
+# コメントの IP ハッシュ専用の鍵。SECRET_KEY とは分ける。
+#
+# SECRET_KEY は漏えいしたら必ず入れ替えるものだが、そのとき
+# IP ハッシュまで一斉に変わると、連投検出やスパム対策の履歴が
+# 過去と繋がらなくなる。鍵の寿命が違うものは鍵を分ける。
+#
+# 本番では必須にしている。未設定でも SECRET_KEY で動いてしまうと、
+# 「分けたつもりで分かれていない」状態に気づけないため。
+COMMENT_IP_HASH_KEY = require("DJANGO_COMMENT_IP_HASH_KEY")
+
 # ALLOWED_HOSTS を空のままにすると、DEBUG=False では全リクエストが 400 になる。
 # 「本番に上げたら真っ白」の原因で最も多いもののひとつ。
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS")

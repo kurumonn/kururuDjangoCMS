@@ -20,6 +20,7 @@ MODULE = "config.settings.production"
 # 本番設定を import できる最小の環境変数。
 MINIMUM_ENV = {
     "DJANGO_SECRET_KEY": "test-only-not-a-real-key-0123456789",
+    "DJANGO_COMMENT_IP_HASH_KEY": "test-only-ip-hash-key-9876543210",
     "DJANGO_ALLOWED_HOSTS": "cms.example.com",
     "POSTGRES_DB": "kururucms",
     "POSTGRES_USER": "kururucms",
@@ -69,6 +70,22 @@ class MissingSecretsTests(SimpleTestCase):
 
     def test_secret_key_is_required(self):
         self.assert_refuses_without("DJANGO_SECRET_KEY")
+
+    def test_ip_hash_key_is_required(self):
+        """IP ハッシュ用の鍵も本番では必須にする。
+
+        未設定でも SECRET_KEY で動いてしまうと、
+        「鍵を分けたつもりで分かれていない」状態に気づけない。
+        """
+        self.assert_refuses_without("DJANGO_COMMENT_IP_HASH_KEY")
+
+    def test_ip_hash_key_differs_from_secret_key(self):
+        """同じ値を入れていないこと自体は設定側では強制しないが、
+        分ける意図が設定に現れていることを固定しておく。"""
+        with production_settings() as settings_module:
+            self.assertNotEqual(
+                settings_module.COMMENT_IP_HASH_KEY, settings_module.SECRET_KEY
+            )
 
     def test_allowed_hosts_is_required(self):
         self.assert_refuses_without("DJANGO_ALLOWED_HOSTS")

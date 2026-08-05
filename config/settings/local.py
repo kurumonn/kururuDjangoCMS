@@ -18,6 +18,13 @@ DEBUG = True
 # `manage.py check --deploy` がこの接頭辞を見て警告を出してくれるため。
 SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"
 
+# コメントの IP ハッシュ専用の鍵。SECRET_KEY とは別の値にする。
+#
+# 開発でも別の値にしておくのは、うっかり同じ値で書いたコードが
+# 「動くから正しい」と見えてしまわないようにするため。
+# 本番では production.py が環境変数を必須にしている。
+COMMENT_IP_HASH_KEY = "django-insecure-dev-only-ip-hash-key"
+
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
 
 # ---------------------------------------------------------------------------

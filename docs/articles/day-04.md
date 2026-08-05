@@ -118,8 +118,7 @@ def validate_image_upload(uploaded_file, *, max_size: int = MAX_UPLOAD_SIZE) -> 
     # --- 3. 実体 ---------------------------------------------------------
     from PIL import Image, UnidentifiedImageError
 
-    original_limit = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+    # ★Image.MAX_IMAGE_PIXELS を書き換えないこと（理由は6章）★
     try:
         payload = _read_all(uploaded_file)
 
@@ -131,24 +130,34 @@ def validate_image_upload(uploaded_file, *, max_size: int = MAX_UPLOAD_SIZE) -> 
             )
 
         try:
-            with Image.open(io.BytesIO(payload)) as image:
-                # verify() は壊れたファイルを検出するが、
-                # 実行後は画像を読み直す必要がある。
-                image.verify()
+            # まず開いて、寸法と形式だけを取る。
+            # Image.open() はヘッダーしか読まないので、
+            # この時点では画素データを伸長していない。
             with Image.open(io.BytesIO(payload)) as image:
                 image_format = image.format
                 width, height = image.size
+
+            # 伸長する前に、自分で画素数を数えて判定する。
+            if width * height > MAX_IMAGE_PIXELS:
+                raise UploadValidationError(
+                    f"画像の画素数が大きすぎます"
+                    f"（{width}×{height}、上限 {MAX_IMAGE_PIXELS:,} 画素）。"
+                )
+
+            # 壊れたファイルの検出。verify() の後は読み直しが要る。
+            with Image.open(io.BytesIO(payload)) as image:
+                image.verify()
         except UnidentifiedImageError as exc:
             raise UploadValidationError(
                 "画像として読み取れませんでした。"
                 "拡張子だけを変えたファイルの可能性があります。"
             ) from exc
         except Image.DecompressionBombError as exc:
+            # Pillow 自身の既定値に引っかかった場合の受け皿。
             raise UploadValidationError("画像の画素数が大きすぎます。") from exc
         except OSError as exc:
             raise UploadValidationError("壊れた画像ファイルです。") from exc
     finally:
-        Image.MAX_IMAGE_PIXELS = original_limit
         # 後続の保存処理のために先頭へ巻き戻す。
         if hasattr(uploaded_file, "seek"):
             uploaded_file.seek(0)
@@ -201,21 +210,37 @@ def upload_to(instance, filename: str) -> str:
 ```python
 # comments/models.py（抜粋）
 import hashlib
+import hmac
 
 from django.conf import settings
 from django.db import models
 
 
-def hash_ip(ip: str | None) -> str:
-    """IP アドレスをハッシュ化する。
+def _ip_hash_key() -> bytes:
+    """IP ハッシュ専用の鍵を返す。
 
-    SECRET_KEY を混ぜるため、DB だけが漏れても元の IP は復元しにくい。
-    完全な匿名化ではないが、生の IP を並べておくよりはるかに安全。
+    SECRET_KEY をそのまま使わないのは、用途が違うため。
+    SECRET_KEY は漏えい時に必ず入れ替えるが、そのとき
+    IP ハッシュまで一斉に変わると、連投の検出やスパム対策の
+    履歴が過去と繋がらなくなる。鍵の寿命が違うものは鍵を分ける。
+    """
+    key = getattr(settings, "COMMENT_IP_HASH_KEY", "") or settings.SECRET_KEY
+    return key.encode("utf-8")
+
+
+def hash_ip(ip: str | None) -> str:
+    """IP アドレスを鍵付きハッシュ（HMAC-SHA256）に変換する。
+
+    これは匿名化ではなく、DB 単体が漏れた場合の緩和策。
+
+      * 鍵なしの SHA-256 だけなら、IPv4 は約43億通りしかないので
+        総当たりで元の IP を求められる。実質的に可逆。
+      * 鍵付き HMAC なら、鍵を持たない相手は総当たりできない。
+      * ただし鍵も一緒に漏れれば、同じく総当たりできる。
     """
     if not ip:
         return ""
-    salted = f"{settings.SECRET_KEY}:{ip}".encode("utf-8")
-    return hashlib.sha256(salted).hexdigest()
+    return hmac.new(_ip_hash_key(), ip.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 class Comment(models.Model):
@@ -364,23 +389,75 @@ queryset.filter(Q(title__icontains=term) | Q(body__icontains=term))
 
 `filter(a=1, b=2)` は AND になります。OR を書きたいときだけ `Q` が必要です。
 
-### `SECRET_KEY` を混ぜたハッシュ
+### 鍵付きハッシュ（HMAC）で IP を保存する
+
+```python
+return hmac.new(_ip_hash_key(), ip.encode("utf-8"), hashlib.sha256).hexdigest()
+```
+
+IP アドレスをそのまま保存すると、データベースが漏れたときに
+「誰がどの記事にコメントしたか」の追跡材料になります。
+
+ハッシュにすると、**同じ人の連投は検出できます**（同じ IP は同じハッシュ）。
+
+#### 「復元できない」とは書けない
+
+ここは正確に書く必要があります。
+
+**IPv4 は約43億通りしかありません。**
+現代の PC なら、SHA-256 を43億回計算するのは数分の作業です。
+つまり**鍵を混ぜないハッシュは、実質的に可逆**です。
+パスワードと違って、候補が有限で、しかも少ないためです。
+
+鍵を混ぜると、鍵を知らない相手はこの総当たりができません。
+ここまでが効果です。
+
+そして、ここから先は効果がありません。
+
+- 鍵も一緒に漏れれば、同じく43億回試すだけで元の IP が分かります
+- したがってこれは**匿名化ではなく、DB 単体が漏れた場合の緩和策**です
+- 鍵は DB とは別の場所（環境変数）に置いて初めて意味を持ちます
+
+「ハッシュ化してあるから個人情報ではない」とは言えません。
+
+#### なぜ連結ではなく HMAC なのか
+
+最初はこう書いていました。
 
 ```python
 salted = f"{settings.SECRET_KEY}:{ip}".encode("utf-8")
 return hashlib.sha256(salted).hexdigest()
 ```
 
-IP アドレスをそのまま保存すると、データベースが漏れたときに
-「誰がどの記事にコメントしたか」の追跡材料になります。
+動きますが、2点直しました。
 
-ハッシュにすると、
+**1. 連結ではなく HMAC を使う。**
+文字列を繋ぐ方式は、鍵とデータの境界が曖昧になります。
+`SHA-256(鍵 ‖ データ)` の形は、ハッシュ関数の内部構造によっては
+**長さ拡張攻撃**が成立する形として知られています
+（SHA-256 はこれに該当します）。
+HMAC は、この問題を避けるために設計された標準の構成です。
 
-- **同じ人の連投は検出できる**（同じ IP は同じハッシュになる）
-- **元の IP は簡単には戻せない**（`SECRET_KEY` を知らないと総当たりできない）
+今回の用途で直ちに危険になるわけではありませんが、
+**鍵付きハッシュには HMAC を使う**と覚えておけば、
+用途が変わったときに考え直さずに済みます。
 
-IPv4 は約43億通りしかないので、ソルト無しのハッシュは総当たりで戻せます。
-`SECRET_KEY` を混ぜるのはそのためです。
+**2. `SECRET_KEY` を使わず、専用の鍵を用意する。**
+
+```python
+COMMENT_IP_HASH_KEY = require("DJANGO_COMMENT_IP_HASH_KEY")
+```
+
+理由は**鍵の寿命が違う**ことです。
+
+`SECRET_KEY` は、漏えいしたら必ず入れ替えます。
+そのとき IP ハッシュも同じ鍵で作っていると、
+入れ替えた瞬間に**過去のハッシュと一致しなくなります**。
+連投の検出もスパム対策の履歴も、そこで切れます。
+
+「鍵を入れ替えなければならない日」に、
+「入れ替えると別の機能が壊れる」という状態を作らないでください。
+これは鍵を分けるだけで避けられます。
 
 ---
 
@@ -419,7 +496,38 @@ SVG は XML なので、中に JavaScript を書けます。
 
 これを `/media/library/xxx.svg` として同一オリジンで配信し、
 利用者がそのURLを直接開くと、**サイトのオリジンでスクリプトが動きます**。
-セッション Cookie も読めます。
+
+ここで「セッション Cookie を盗まれる」と書きたくなりますが、
+**それは正確ではありません。** 1日目でこう設定しています。
+
+```python
+SESSION_COOKIE_HTTPONLY = True
+```
+
+`HttpOnly` が付いた Cookie は JavaScript から読めません。
+`document.cookie` にセッション ID は出てきません。
+
+では安全かというと、そうではありません。
+**Cookie を読めなくても、Cookie は自動的に送られます。**
+
+同一オリジンでスクリプトが動けば、次のことができます。
+
+| できること | 仕組み |
+| --- | --- |
+| ログイン状態のままリクエストを送る | `fetch()` に Cookie が自動で付く |
+| CSRF トークンを取得する | 画面の HTML から読める |
+| 記事の投稿・編集・削除 | 上の2つを組み合わせる |
+| 画面に表示されている情報を送信する | DOM を読んで外部へ送る |
+| メールアドレスの変更 | 設定画面を読み、その値で送信する |
+
+つまり **Cookie の値そのものを持ち出す代わりに、
+被害者のブラウザーを操作台として使う**という形になります。
+「盗まれる」より「使われる」の方が実態に近いです。
+
+`HttpOnly` は「Cookie の値が外部サーバーへ渡ること」を防ぎます。
+これは意味のある防御です（渡ってしまえば攻撃者は
+自分の環境から何度でも使えます）。
+ただし**同一オリジンで JavaScript が動くこと自体は防げません**。
 
 対策は次のいずれかです。
 
@@ -438,11 +546,97 @@ SVG は XML なので、中に JavaScript を書けます。
 ```
 
 小さいファイルで、サーバーのメモリを食い尽くせます。
-Pillow には上限の仕組みがあるので、既定より厳しくしています。
+
+Pillow には上限の仕組みがあります。最初はこう書いていました。
 
 ```python
+original_limit = Image.MAX_IMAGE_PIXELS
 Image.MAX_IMAGE_PIXELS = 50_000_000
+try:
+    ...
+finally:
+    Image.MAX_IMAGE_PIXELS = original_limit
 ```
+
+**この書き方は2つの理由で誤りでした。** 両方とも後から気づいたものです。
+
+#### 誤り1: 他のリクエストに影響する
+
+`Image.MAX_IMAGE_PIXELS` は、Pillow というモジュール全体で共有される
+ただの変数です。プロセス内のどのコードから見ても同じ値です。
+
+Gunicorn のスレッドワーカーのように、
+**同じプロセスで複数のリクエストを同時に処理する構成**では、
+片方の書き換えがもう片方から見えます。
+
+```text
+リクエストA: 50_000_000 に下げる
+リクエストB: 画像を開く          ← A の設定が効いてしまう
+リクエストA: 元の値に戻す
+リクエストB: 画像を開く          ← 今度は既定値に戻っている
+```
+
+B の結果が A の進み具合で決まります。
+**落ちるときと落ちないときがある**という、最も再現しにくい形です。
+
+`finally` で戻しているので前後を比べれば差はありません。
+問題が起きるのは**その途中**です。
+
+#### 誤り2: そもそも 50 メガピクセルで止まっていなかった
+
+こちらの方が深刻でした。
+
+Pillow はこの値を境に**2段階**の反応をします。
+
+| 画素数 | Pillow の反応 |
+| --- | --- |
+| `MAX_IMAGE_PIXELS` 以下 | 何もしない |
+| `MAX_IMAGE_PIXELS` 超 | `DecompressionBombWarning`（**警告だけ**） |
+| `MAX_IMAGE_PIXELS` の2倍超 | `DecompressionBombError`（例外） |
+
+50 メガピクセルを指定しても、**例外になるのは 1億画素を超えてから**です。
+その間の画像は警告が出るだけで、そのまま通っていました。
+
+実際に確かめた結果です（Pillow 12.3.0、`MAX_IMAGE_PIXELS = 50_000_000`）。
+
+```text
+10000x4900  =  49,000,000 px -> 通った / 警告なし
+10000x6000  =  60,000,000 px -> 通った / DecompressionBombWarning
+10000x12000 = 120,000,000 px -> DecompressionBombError
+```
+
+真ん中の行が問題です。上限を超えているのに通っています。
+
+「上限を 50 メガピクセルにした」と書いてあるのに、
+実際には 1億画素まで通っていた、ということです。
+テストは通っていました。境界の画像を試していなかったためです。
+
+#### 直した形
+
+Pillow の共有設定には触れず、開いた後に自分で数えます。
+
+```python
+with Image.open(io.BytesIO(payload)) as image:
+    width, height = image.size
+
+if width * height > MAX_IMAGE_PIXELS:
+    raise UploadValidationError("画像の画素数が大きすぎます。")
+```
+
+`Image.open()` はヘッダーしか読まないので、この時点で
+画素データは伸長されていません。**伸長する前に数えられます**。
+
+共有されている値を書き換えないので、同時に何本走っていても
+結果が変わりません。上限もそのままの値で効きます。
+
+Pillow の既定値（約 89,478,485 画素）はそのまま残しておき、
+自前の検査をすり抜けた場合の受け皿として `DecompressionBombError` も
+捕まえています。
+
+> どうしても Pillow の既定値そのものを変えたい場合は、
+> リクエストごとではなく**起動時に1回だけ**設定します
+> （`AppConfig.ready()` など）。
+> 「一時的に変えて戻す」が成立しない種類の値だと考えてください。
 
 ### アップロード上限は3か所で決まる
 
@@ -680,8 +874,15 @@ for term in query.split()[:5]:
 
 **問2.**
 SVG は XML なので、内部に `<script>` を書けます。
-同一オリジンで配信すると、閲覧者のブラウザーでスクリプトが実行され、
-セッション Cookie を読まれる可能性があります（XSS）。
+同一オリジンで配信すると、閲覧者のブラウザーでスクリプトが実行されます（XSS）。
+
+`SESSION_COOKIE_HTTPONLY = True` にしてあるため、
+セッション Cookie の値を JavaScript から読み出すことはできません。
+しかし Cookie はリクエストに自動で付くので、
+**ログイン状態のまま記事を投稿・削除したり、
+画面に表示されている情報を外部へ送ったり**はできます。
+CSRF トークンも画面から読めます。
+
 受け付ける場合は、別ドメインから配信するか、
 `Content-Disposition: attachment` で必ずダウンロードさせる必要があります。
 

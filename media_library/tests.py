@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import io
+from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from PIL import Image
 
 from .validators import (
+    MAX_IMAGE_PIXELS,
     MAX_UPLOAD_SIZE,
     UploadValidationError,
     validate_image_upload,
@@ -144,3 +146,66 @@ class UploadPathTests(TestCase):
         first = upload_to(asset, "photo.png")
         second = upload_to(asset, "photo.png")
         self.assertNotEqual(first, second)
+
+
+class DecompressionBombTests(TestCase):
+    """画素数の検査が、共有状態を汚さずに動くこと。
+
+    以前は検証の間だけ ``Image.MAX_IMAGE_PIXELS`` を書き換えて
+    finally で戻していた。この変数は Pillow モジュール全体で共有され、
+    プロセス内の全リクエストから見えるため、同じプロセスで
+    複数のリクエストを同時に処理する構成では他方に影響する。
+    """
+
+    def test_global_pillow_limit_is_untouched_during_validation(self):
+        """★検証の「最中」に共有値が変わっていないこと★
+
+        前後で比べるだけでは足りない。以前の実装は finally で元へ戻して
+        いたので、呼び出しの前後を比べる限り差は出なかった。
+        他のリクエストから見えるのは**その途中**なので、
+        途中を観測しなければ意味がない。
+        """
+        observed = []
+        original_open = Image.open
+
+        def spy(*args, **kwargs):
+            observed.append(Image.MAX_IMAGE_PIXELS)
+            return original_open(*args, **kwargs)
+
+        with mock.patch.object(Image, "open", spy):
+            validate_image_upload(upload("ok.png", make_image_bytes("PNG")))
+
+        self.assertTrue(observed, "Image.open が呼ばれていない")
+        for seen in observed:
+            self.assertEqual(
+                seen,
+                Image.MAX_IMAGE_PIXELS,
+                "検証中に Pillow の共有設定が書き換わっている。"
+                "同じプロセスの他のリクエストに影響する。",
+            )
+
+    def test_oversized_image_is_rejected_by_our_own_check(self):
+        """Pillow の既定より厳しい上限が、自前の検査で効くこと。
+
+        Pillow の既定はおよそ 89,478,485 画素なので、この画像は
+        Pillow 自身の判定には引っかからない。自前で数えていなければ通る。
+        """
+        pixels = MAX_IMAGE_PIXELS + 1
+        width = 10_000
+        height = pixels // width + 1
+        self.assertLess(width * height, Image.MAX_IMAGE_PIXELS)
+
+        payload = make_image_bytes("PNG", size=(width, height))
+
+        with self.assertRaises(UploadValidationError) as caught:
+            validate_image_upload(upload("huge.png", payload))
+
+        self.assertIn("画素数", str(caught.exception))
+
+    def test_image_just_under_the_limit_is_accepted(self):
+        width, height = 10_000, MAX_IMAGE_PIXELS // 10_000
+        self.assertLessEqual(width * height, MAX_IMAGE_PIXELS)
+
+        payload = make_image_bytes("PNG", size=(width, height))
+
+        self.assertEqual(validate_image_upload(upload("big.png", payload)), "PNG")

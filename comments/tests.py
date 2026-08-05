@@ -242,3 +242,53 @@ class ClientIpTests(TestCase):
         request = self._request("203.0.113.9", remote_addr="10.0.0.1")
         with override_settings(TRUSTED_PROXY_COUNT=2):
             self.assertEqual(client_ip(request), "10.0.0.1")
+
+
+class IpHashTests(TestCase):
+    """IP のハッシュ化について、できること・できないことを固定する。
+
+    これは匿名化ではなく、DB 単体が漏れた場合の緩和策。
+    鍵も一緒に漏れれば、IPv4 は約43億通りしかないので総当たりできる。
+    """
+
+    def test_hash_is_keyed_hmac_not_plain_sha256(self):
+        """鍵なしの SHA-256 では総当たりできてしまうので、HMAC にする。"""
+        import hashlib
+        import hmac as hmac_module
+
+        from django.conf import settings
+
+        ip = "198.51.100.7"
+        key = settings.COMMENT_IP_HASH_KEY.encode("utf-8")
+
+        self.assertEqual(
+            hash_ip(ip),
+            hmac_module.new(key, ip.encode("utf-8"), hashlib.sha256).hexdigest(),
+        )
+        # 鍵を混ぜない素の SHA-256 とは一致しない。
+        self.assertNotEqual(hash_ip(ip), hashlib.sha256(ip.encode()).hexdigest())
+
+    def test_secret_key_rotation_does_not_change_ip_hashes(self):
+        """SECRET_KEY を入れ替えても、連投検出の履歴が切れないこと。
+
+        鍵を分けた理由そのもの。SECRET_KEY は漏えい時に必ず
+        入れ替えるが、そのとき IP ハッシュまで一斉に変わると
+        過去のハッシュと一致しなくなる。
+        """
+        before = hash_ip("198.51.100.7")
+
+        with self.settings(SECRET_KEY="totally-different-secret-key"):
+            self.assertEqual(hash_ip("198.51.100.7"), before)
+
+    def test_changing_the_dedicated_key_changes_the_hash(self):
+        before = hash_ip("198.51.100.7")
+
+        with self.settings(COMMENT_IP_HASH_KEY="another-ip-hash-key"):
+            self.assertNotEqual(hash_ip("198.51.100.7"), before)
+
+    def test_different_addresses_do_not_collide(self):
+        self.assertNotEqual(hash_ip("198.51.100.7"), hash_ip("198.51.100.8"))
+
+    def test_empty_ip_returns_empty_string(self):
+        self.assertEqual(hash_ip(None), "")
+        self.assertEqual(hash_ip(""), "")
