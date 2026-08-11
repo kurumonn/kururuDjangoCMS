@@ -7,6 +7,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
+from django.views.generic import RedirectView
 
 from core.views import healthz
 
@@ -15,6 +16,27 @@ urlpatterns = [
     # 認証を掛けていないのは、監視側に認証情報を持たせたくないため。
     # 返すのは状態だけで、内部の情報は含めない（core/views.py を参照）。
     path("healthz/", healthz, name="healthz"),
+    # ★管理画面のログイン画面を、allauth のログインへ差し替える★
+    #
+    # `admin.site.urls` には admin 自身のログイン画面が含まれている。
+    # これは allauth のログインフローとは**別物**で、
+    # ログインステージ（＝2段目の認証）を一切通らない。
+    #
+    # 開けたままにしていると、TOTP もパスキーも登録済みの管理者が
+    # パスワードだけで管理画面へ入れる。多要素認証を必須にした意味が無くなる。
+    # 認証バックエンドは allauth のものが効いているので、
+    # メールアドレスでも通ってしまう。
+    #
+    # URL は上から順に照合されるので、`admin.site.urls` より**前**に置く。
+    # 後ろに置くと admin 側が先に一致して、この行は一生使われない。
+    #
+    # `query_string=True` で `?next=...` を引き継ぐ。
+    # 落とすと、ログイン後に目的のページではなくトップへ戻される。
+    path(
+        f"{settings.ADMIN_URL_PATH}/login/",
+        RedirectView.as_view(pattern_name="account_login", query_string=True),
+        name="admin_login_redirect",
+    ),
     # 管理画面のパスは環境変数で変更できるようにしておく。
     # 既定の /admin/ は総当たり攻撃の標的になりやすい。
     path(f"{settings.ADMIN_URL_PATH}/", admin.site.urls),

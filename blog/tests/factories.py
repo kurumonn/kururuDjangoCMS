@@ -65,7 +65,25 @@ def create_staff(username="editor", **kwargs):
         user, "blog.add_article", "blog.change_article", "blog.delete_article"
     )
     add_totp(user)
+    verify_email(user)
     return user
+
+
+def verify_email(user):
+    """メールアドレスを確認済みにする。
+
+    `ACCOUNT_EMAIL_VERIFICATION = "mandatory"` なので、
+    確認済みの `EmailAddress` が無いとログイン画面を通過できない。
+    `Client.login()` はそこを見ないので、近道でログインしている限り
+    足りないことに気づけない。
+    """
+    from allauth.account.models import EmailAddress
+
+    EmailAddress.objects.get_or_create(
+        user=user,
+        email=user.email,
+        defaults={"verified": True, "primary": True},
+    )
 
 
 def add_totp(user):
@@ -74,6 +92,22 @@ def add_totp(user):
 
     secret = totp_auth.generate_totp_secret()
     return totp_auth.TOTP.activate(user, secret).instance
+
+
+def login_staff(client, user, password="test-pass-phrase-1234"):
+    """スタッフとして、本番と同じ経路でログインする。
+
+    `client.login()` を使ってはいけない。あれは
+    `django.contrib.auth.login()` を直接呼ぶので allauth のログインフローを
+    通らず、セッションに認証記録が残らない。
+
+    `StaffMfaRequiredMiddleware` はその記録で「いくつの要素で成立した
+    セッションか」を数える。記録の無いセッションは管理者向けの画面へ
+    進めないので、近道でログインしたテストだけが落ちる。
+    """
+    from accounts.testing import login_through_allauth
+
+    login_through_allauth(client, user, password)
 
 
 def create_editor(username="reviewer", **kwargs):

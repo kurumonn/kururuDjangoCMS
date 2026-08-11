@@ -22,6 +22,7 @@ from blog.tests.factories import (
     create_editor,
     create_staff,
     create_user,
+    login_staff,
 )
 from comments.models import Comment
 
@@ -169,8 +170,8 @@ class AutosaveApiTests(TestCase):
         self.assertIn("自動保存された本文", self.article.body)
 
     def test_staff_can_autosave_others_article(self):
-        create_staff(username="save-staff")
-        self.client.login(username="save-staff", password=PASSWORD)
+        staff = create_staff(username="save-staff")
+        login_staff(self.client, staff)
         self.assertEqual(self._post().status_code, 200)
 
     def test_response_version_allows_second_save(self):

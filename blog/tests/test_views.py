@@ -19,6 +19,7 @@ from .factories import (
     create_editor,
     create_staff,
     create_user,
+    login_staff,
 )
 
 PASSWORD = "test-pass-phrase-1234"
@@ -153,8 +154,8 @@ class ArticleDetailViewTests(TestCase):
         self.assertTrue(response.context["is_preview"])
 
     def test_staff_can_preview_any_draft(self):
-        create_staff(username="detail-staff")
-        self.client.login(username="detail-staff", password=PASSWORD)
+        staff = create_staff(username="detail-staff")
+        login_staff(self.client, staff)
         response = self.client.get(self.draft.get_absolute_url())
         self.assertEqual(response.status_code, 200)
 
@@ -251,8 +252,8 @@ class ArticleUpdateDeleteViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_staff_can_edit_others_article(self):
-        create_staff(username="staffer")
-        self.client.login(username="staffer", password=PASSWORD)
+        staff = create_staff(username="staffer")
+        login_staff(self.client, staff)
         response = self.client.get(self.update_url)
         self.assertEqual(response.status_code, 200)
 

@@ -9,6 +9,10 @@ allauth の MFA 実装そのものは本家がテストしている。
 
 from __future__ import annotations
 
+import time
+from urllib.parse import parse_qs, urlparse
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
@@ -16,6 +20,8 @@ from django.urls import reverse
 
 from allauth.account.models import EmailAddress
 from allauth.mfa.models import Authenticator
+
+from accounts.testing import current_totp_code, login_through_allauth
 
 User = get_user_model()
 
@@ -43,23 +49,62 @@ def add_totp(user) -> Authenticator:
     return totp_auth.TOTP.activate(user, secret).instance
 
 
-def current_totp_code(authenticator: Authenticator) -> str:
-    """認証アプリが「いま」表示するのと同じコードを計算する。
+def add_passkey(user, *, name: str = "テスト用パスキー") -> Authenticator:
+    """パスキーを登録済みの状態にする。
 
-    共有秘密鍵と現在時刻から、サーバーと端末が独立に同じ値を出す
-    ——これが TOTP の仕組みそのもの。
-    allauth には「コードを生成する」公開関数が無い（検証しかしない）ので、
-    内部の hotp_value / format_hotp_value を使って組み立てる。
+    実際の credential は作らない。ここで確かめたいのは
+    「パスキーが1本登録されている状態でミドルウェアがどう振る舞うか」であって、
+    WebAuthn の署名検証そのものは allauth と fido2 の担当だから。
     """
-    import time
+    return Authenticator.objects.create(
+        user=user,
+        type=Authenticator.Type.WEBAUTHN,
+        data={"name": name, "credential": {}},
+    )
 
-    from allauth.mfa import app_settings as mfa_settings
-    from allauth.mfa.utils import decrypt
-    from allauth.mfa.totp.internal import auth as totp_auth
 
-    secret = decrypt(authenticator.data["secret"])
-    counter = int(time.time()) // mfa_settings.TOTP_PERIOD
-    return totp_auth.format_hotp_value(totp_auth.hotp_value(secret, counter))
+def force_passkey_only_login(client, user, authenticator: Authenticator) -> None:
+    """パスキー単独ログインの直後と同じセッションを作る。
+
+    テストから本物の WebAuthn を通すことはできない（署名する認証器が無い）。
+    そこで allauth がセッションへ残す**記録の形**を再現する。
+    形が合っていることは PasswordlessRecordShapeTests で
+    allauth 自身の判定関数と突き合わせて固定している。
+    """
+    from allauth.account.internal.flows.login import (
+        AUTHENTICATION_METHODS_SESSION_KEY,
+    )
+
+    client.force_login(user)
+    session = client.session
+    session[AUTHENTICATION_METHODS_SESSION_KEY] = [
+        {
+            "method": "mfa",
+            "at": time.time(),
+            "id": authenticator.pk,
+            "type": "webauthn",
+            "passwordless": True,
+        }
+    ]
+    session.save()
+
+
+def append_authentication_record(client, **record) -> None:
+    """セッションの認証記録へ1件足す（再認証を通ったあとの状態を作る）。"""
+    from allauth.account.internal.flows.login import (
+        AUTHENTICATION_METHODS_SESSION_KEY,
+    )
+
+    session = client.session
+    records = session.get(AUTHENTICATION_METHODS_SESSION_KEY, [])
+    records.append({"at": time.time(), **record})
+    session[AUTHENTICATION_METHODS_SESSION_KEY] = records
+    session.save()
+
+
+def login_with_password_and_totp(client, user, authenticator: Authenticator) -> None:
+    """パスワード＋TOTP で、最後まで本物のログインを通す。"""
+    login_through_allauth(client, user, PASSWORD)
 
 
 class MfaSettingsTests(TestCase):
@@ -332,8 +377,8 @@ class StaffMfaRequiredMiddlewareTests(TestCase):
         self.assertEqual(self.client.get(reverse("account_logout")).status_code, 200)
 
     def test_staff_with_totp_passes_through(self):
-        add_totp(self.staff)
-        self.client.force_login(self.staff)
+        authenticator = add_totp(self.staff)
+        login_with_password_and_totp(self.client, self.staff, authenticator)
         self.assertEqual(
             self.client.get(reverse("blog:article_list")).status_code, 200
         )
@@ -343,10 +388,14 @@ class StaffMfaRequiredMiddlewareTests(TestCase):
         from allauth.mfa.recovery_codes.internal import auth as rc_auth
 
         rc_auth.RecoveryCodes.activate(self.staff)
-        self.client.force_login(self.staff)
+        self.client.post(
+            reverse("account_login"),
+            {"login": self.staff.email, "password": PASSWORD},
+        )
 
         response = self.client.get(reverse("blog:article_list"))
         self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("mfa_index"))
 
     def test_non_staff_is_not_forced(self):
         """記事を書くだけの利用者にまで強制すると運用が回らない。"""
@@ -371,3 +420,240 @@ class StaffMfaRequiredMiddlewareTests(TestCase):
         self.assertEqual(
             self.client.get(reverse("blog:article_list")).status_code, 200
         )
+
+
+class PasswordlessRecordShapeTests(TestCase):
+    """テストで作る「パスキー単独ログイン」の記録が、本物と同じ形であること。
+
+    偽のセッションを組み立ててテストする以上、その形が allauth の実物と
+    ずれていたら、テストは何も証明しない。allauth 自身の判定関数に
+    同じ記録を読ませて、True が返ることで形を固定する。
+    allauth 側が形を変えたら、このテストが落ちて気づける。
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.user = make_user("shape-user")
+
+    def test_allauth_agrees_this_is_a_passwordless_login(self):
+        from allauth.mfa.webauthn.internal.flows import did_use_passwordless_login
+
+        authenticator = add_passkey(self.user)
+        force_passkey_only_login(self.client, self.user, authenticator)
+
+        request = self.client.get(reverse("blog:article_list")).wsgi_request
+        self.assertTrue(did_use_passwordless_login(request))
+
+    def test_a_normal_login_is_not_seen_as_passwordless(self):
+        from allauth.mfa.webauthn.internal.flows import did_use_passwordless_login
+
+        authenticator = add_totp(self.user)
+        login_with_password_and_totp(self.client, self.user, authenticator)
+
+        request = self.client.get(reverse("blog:article_list")).wsgi_request
+        self.assertFalse(did_use_passwordless_login(request))
+
+
+@override_settings(MFA_REQUIRED_FOR_STAFF=True)
+class StaffSessionFactorTests(TestCase):
+    """管理者権限の画面は「何要素で成立したセッションか」で判定する。
+
+    パスキー単独ログイン（MFA_PASSKEY_LOGIN_ENABLED = True）は、
+    利用者から見れば一瞬で終わる便利な入口だが、
+    要素としては「その認証器を持っていること」1つしかない。
+
+    しかも allauth は認証時に UserVerificationRequirement.PREFERRED を使う。
+    PREFERRED は「できれば生体認証や PIN を確認して」という要望であって、
+    要求ではない。fido2 は REQUIRED のときしか UV フラグを検査しないので、
+    PIN を設定していないセキュリティキーなら、拾っただけで通る。
+
+    記事を読むだけならそれで構わない。
+    しかし管理画面は全記事を書き換えられる場所なので、
+    ここだけは「もう1要素」を求める。
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.staff = make_user("factor-staff", is_staff=True)
+        self.author = make_user("factor-author")
+        self.passkey = add_passkey(self.staff)
+
+    def test_passkey_only_session_cannot_reach_staff_pages(self):
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+
+        response = self.client.get(reverse("blog:article_list"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("account_reauthenticate"), response.url)
+
+    def test_passkey_only_session_can_still_reach_reauthentication(self):
+        """追加の本人確認をしに行く先を塞ぐと、詰んで抜けられなくなる。
+
+        `mfa_reauthenticate` は allauth 自身が
+        `/accounts/reauthenticate/` へ回すことがある（認証アプリ未登録のとき）。
+        302 を禁止するのではなく、**最終的に開けること**を確かめる。
+        """
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+
+        for name in ("account_reauthenticate", "mfa_reauthenticate", "account_logout"):
+            with self.subTest(name=name):
+                response = self.client.get(reverse(name), follow=True)
+                self.assertEqual(response.status_code, 200)
+
+    def test_the_gate_does_not_bounce_forever(self):
+        """締め出した先が、また締め出されないこと。
+
+        追加要素を求める画面自体をミドルウェアが弾くと、
+        リダイレクトが往復して利用者は永久に前へ進めない。
+        """
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+
+        response = self.client.get(reverse("blog:article_list"), follow=True)
+        self.assertEqual(response.status_code, 200)
+        # 最後に着いた場所が、堂々巡りではなく本人確認の画面であること。
+        final_url = response.redirect_chain[-1][0]
+        self.assertIn("reauthenticate", final_url)
+
+    def test_the_gate_remembers_where_the_user_was_going(self):
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+
+        response = self.client.get(reverse("blog:article_list"))
+
+        query = parse_qs(urlparse(response.url).query)
+        self.assertEqual(query["next"], [reverse("blog:article_list")])
+
+    def test_password_reauthentication_unlocks_the_session(self):
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+        append_authentication_record(
+            self.client, method="password", reauthenticated=True
+        )
+
+        self.assertEqual(
+            self.client.get(reverse("blog:article_list")).status_code, 200
+        )
+
+    def test_totp_counts_as_the_second_factor(self):
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+        append_authentication_record(
+            self.client, method="mfa", type="totp", id=999, reauthenticated=True
+        )
+
+        self.assertEqual(
+            self.client.get(reverse("blog:article_list")).status_code, 200
+        )
+
+    def test_tapping_a_passkey_again_is_not_a_second_factor(self):
+        """同じ種類の要素を2回通しても、要素は1つのまま。
+
+        再認証の画面にはパスキーの選択肢も出る。そこで同じ鍵を
+        もう一度触っただけで通ってしまうなら、この対策は形だけになる。
+        """
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+        append_authentication_record(
+            self.client,
+            method="mfa",
+            type="webauthn",
+            id=self.passkey.pk,
+            reauthenticated=True,
+        )
+
+        self.assertEqual(
+            self.client.get(reverse("blog:article_list")).status_code, 302
+        )
+
+    def test_a_different_passkey_is_also_not_a_second_factor(self):
+        """2本目のパスキーでも、確認できていないものは同じ。"""
+        other = add_passkey(self.staff, name="2本目")
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+        append_authentication_record(
+            self.client, method="mfa", type="webauthn", id=other.pk
+        )
+
+        self.assertEqual(
+            self.client.get(reverse("blog:article_list")).status_code, 302
+        )
+
+    def test_session_without_any_allauth_record_is_blocked(self):
+        """allauth を通っていないセッションは通さない（安全側に倒す）。
+
+        force_login() や、将来 django.contrib.auth.login() を直接呼ぶ
+        コードが増えたときに、黙って素通りさせないための線引き。
+        締め出しても復旧はログインし直すだけなので、緩めるより厳しくする。
+        """
+        add_totp(self.staff)
+        self.client.force_login(self.staff)
+
+        response = self.client.get(reverse("blog:article_list"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_normal_password_and_totp_login_is_unaffected(self):
+        authenticator = add_totp(self.staff)
+        login_with_password_and_totp(self.client, self.staff, authenticator)
+
+        self.assertEqual(
+            self.client.get(reverse("blog:article_list")).status_code, 200
+        )
+
+    def test_non_staff_can_use_a_passkey_alone(self):
+        """記事を書くだけの利用者にまで追加要素を求めない。
+
+        パスキー単独ログインを丸ごと無効にするのではなく、
+        権限の強い画面だけ条件を上げる、という切り分け。
+        """
+        passkey = add_passkey(self.author)
+        force_passkey_only_login(self.client, self.author, passkey)
+
+        self.assertEqual(
+            self.client.get(reverse("blog:article_list")).status_code, 200
+        )
+
+    @override_settings(MFA_REQUIRED_FOR_STAFF=False)
+    def test_gate_follows_the_same_switch(self):
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+        self.assertEqual(
+            self.client.get(reverse("blog:article_list")).status_code, 200
+        )
+
+
+class AdminLoginTests(TestCase):
+    """Django 標準の管理画面ログインは、多要素認証を通らない。
+
+    `admin.site.urls` には admin 自身のログイン画面が含まれる。
+    これは allauth のログインフローとは別物で、
+    ログインステージ（＝2段目の認証）を一切通らない。
+
+    つまり /admin/login/ を開けたままにしていると、
+    TOTP もパスキーも登録済みの管理者が、
+    **パスワードだけで管理画面へ入れてしまう**。
+    多要素認証を必須にした意味が無くなる。
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.staff = make_user("admin-login-staff", is_staff=True)
+        self.staff.is_superuser = True
+        self.staff.save()
+        self.admin_login_url = f"/{settings.ADMIN_URL_PATH}/login/"
+
+    def test_admin_login_page_redirects_to_allauth(self):
+        response = self.client.get(self.admin_login_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("account_login"), response.url)
+
+    def test_password_alone_cannot_enter_the_admin(self):
+        add_totp(self.staff)
+
+        self.client.post(
+            self.admin_login_url,
+            {
+                "username": self.staff.email,
+                "password": PASSWORD,
+                "next": f"/{settings.ADMIN_URL_PATH}/",
+            },
+        )
+
+        response = self.client.get(f"/{settings.ADMIN_URL_PATH}/")
+        self.assertEqual(response.status_code, 302)
+
+    def test_the_redirect_keeps_where_the_user_wanted_to_go(self):
+        response = self.client.get(f"{self.admin_login_url}?next=/admin/blog/")
+        self.assertIn("next=/admin/blog/", response.url)
