@@ -408,6 +408,230 @@ return Authenticator.objects.filter(user=user).exclude(
 
 ---
 
+## 7. 多要素認証を必須にしたつもりで、パスワードだけで管理画面に入れた
+
+**公開前の見直しで見つかった。エラーは出ていない。**
+
+別の案件でパスキーの監査を受けたので、この CMS も同じ状態になっていないか
+確かめたのがきっかけ。「たぶん大丈夫」で済ませずに実際に試したら、2件出た。
+
+### 症状
+
+TOTP を登録済みのスーパーユーザーで、`/admin/login/` にパスワードだけを送る。
+
+```text
+POST /admin/login/  →  302 /admin/
+GET  /admin/        →  200
+session keys: ['_auth_user_backend', '_auth_user_hash', '_auth_user_id']
+```
+
+入れてしまった。2段目の認証は一度も出ていない。
+
+### 原因
+
+`admin.site.urls` には **admin 自身のログイン画面**が含まれている。
+これは allauth のログインフローとは別物で、ログインステージを通らない。
+
+```text
+/accounts/login/  → allauth → ログインステージ → 2段目 → 完了
+/admin/login/     → Django の LoginView → 完了
+                                           ↑ 2段目が無い
+```
+
+セッションに `account_authentication_methods` が無いのがその証拠。
+allauth を一度も通っていない。
+
+認証バックエンドは allauth のものが効いているので、
+ユーザー名の欄にメールアドレスを入れても通る。
+
+### 直し方
+
+admin のログイン画面を、allauth のログインへ差し替える。
+
+```python
+# config/urls.py
+path(
+    f"{settings.ADMIN_URL_PATH}/login/",
+    RedirectView.as_view(pattern_name="account_login", query_string=True),
+    name="admin_login_redirect",
+),
+path(f"{settings.ADMIN_URL_PATH}/", admin.site.urls),
+```
+
+`admin.site.urls` より **前** に置くこと。
+URL は上から順に照合されるので、後ろに置くと admin 側が先に一致して
+この行は一生使われない。書いたのに効かない、という形の事故になる。
+
+`query_string=True` を落とすと `?next=` が消えて、
+ログイン後に目的のページではなくトップへ戻される。
+
+### なぜ気づかなかったか
+
+**正しい手順で操作している限り、この経路を通らないから。**
+`/accounts/login/` から入れば、ちゃんと TOTP を求められる。
+画面を見ている限り、多要素認証は完璧に動いているように見える。
+
+迂回路は「わざと変な入り方を試す」までは姿を現さない。
+
+---
+
+## 8. パスキー1本で管理画面に入れた（UV は保証されていない）
+
+**同じ見直しで見つかった。こちらのほうが理屈が細かい。**
+
+### 症状
+
+`MFA_PASSKEY_LOGIN_ENABLED = True` にしていると、パスキー1本でログインが完了する。
+そのセッションで、そのまま管理画面まで入れる。
+
+### 原因1: 2段目の認証が飛ばされる
+
+allauth は、パスワードレスのパスキーログインを検出すると
+追加認証のステージを実行しない。
+
+```python
+# allauth/mfa/stages.py
+if did_use_passwordless_login(request):
+    return False
+```
+
+これ自体は正しい判断。パスキーが UV 込みで使われていれば2要素だから。
+
+### 原因2: その UV が保証されていない
+
+allauth が**認証時**に使う指定は `PREFERRED`。
+
+```python
+# allauth/mfa/webauthn/internal/auth.py
+def begin_authentication(user=None) -> dict:
+    request_options, state = server.authenticate_begin(
+        credentials=...,
+        user_verification=UserVerificationRequirement.PREFERRED,
+    )
+```
+
+そして fido2 は `REQUIRED` のときしか UV フラグを検査しない。
+
+```python
+# fido2/server.py
+if (
+    state["user_verification"] == UserVerificationRequirement.REQUIRED
+    and not auth_data.is_user_verified()
+):
+```
+
+登録時は `REQUIRED` なので「登録したときは確認された」。
+だが認証時は確認されるとは限らない。
+**PIN を設定していないセキュリティキーなら、拾って挿すだけで通る。**
+
+### 原因3: ミドルウェアが「登録済みか」しか見ていなかった
+
+自分で書いた部分。
+
+```python
+return not self._has_authenticator(user)   # 登録しているか、だけ
+```
+
+登録は済んでいる。だから通る。
+
+```text
+パスキーを拾う
+   ↓ ログイン（PIN 無しでも通る）
+   ↓ 2段目は飛ばされる
+   ↓ ミドルウェア「認証手段は登録済みですね」→ 通過
+管理画面
+```
+
+「多要素認証を必須にした」と書いたコードが、1要素で通していた。
+
+### 直し方
+
+セッションが何で成立したかを見る。
+allauth はログインの過程を `account_authentication_methods` に残している。
+
+```python
+# パスキー単独ログインの直後
+[{"method": "mfa", "type": "webauthn", "passwordless": True, "id": 3, "at": ...}]
+
+# パスワード＋TOTP でログインした直後
+[{"method": "password", "at": ...},
+ {"method": "mfa", "type": "totp", "id": 1, "at": ...}]
+```
+
+パスキー（webauthn）を数えないことにして、
+1つも残らなければ追加の本人確認へ送る。
+
+**同じ鍵をもう一度触っても要素は増えない**ようにするのが要点。
+再認証の画面にはパスキーの選択肢も出るので、
+そこで通れてしまうなら対策は形だけになる。
+
+```python
+def test_tapping_a_passkey_again_is_not_a_second_factor(self):
+    """同じ種類の要素を2回通しても、要素は1つのまま。"""
+```
+
+### 踏んだ小さな失敗: 追加要素を求める先が塞がって往復した
+
+最初、追加の本人確認ページも判定の対象に入れてしまい、
+リダイレクトが往復した。1つ目のエラー（4章）とまったく同じ形の失敗。
+
+```python
+def test_the_gate_does_not_bounce_forever(self):
+    """締め出した先が、また締め出されないこと。"""
+```
+
+---
+
+## 9. テストの近道が、穴を隠していた
+
+7章・8章を直したら、既存のテストが3件落ちた。
+
+```text
+FAIL: test_staff_can_preview_any_draft
+FAIL: test_staff_can_edit_others_article
+FAIL: test_staff_can_autosave_others_article
+AssertionError: 302 != 200
+```
+
+### 原因
+
+どれも `Client.login()` を使っていた。
+これは `django.contrib.auth.login()` を直接呼ぶので、
+allauth のログインフローを通らず、セッションに認証記録が残らない。
+
+記録が空のセッションを**通さない**ことにしたので、まとめて落ちた。
+
+### これは直すべきか、緩めるべきか
+
+緩めれば3件は通る。だが、それは
+「allauth を通らないログインを黙って素通りさせる」という判断になる。
+将来 `auth.login()` を直接呼ぶコードが増えたときに気づけない。
+
+締め出しても、ログインし直せば戻れる。
+**戻れる不便は、気づけない穴より安い。**
+なのでテスト側を本番と同じ経路に寄せた。
+
+```python
+# blog/tests/factories.py
+def login_staff(client, user, password=...):
+    """スタッフとして、本番と同じ経路でログインする。"""
+```
+
+### そこで出てきた、もう1つの隠れていた不足
+
+`login_staff()` に差し替えても、まだ落ちた。
+`create_staff()` が確認済みの `EmailAddress` を作っていなかった。
+
+`ACCOUNT_EMAIL_VERIFICATION = "mandatory"` なので、
+確認済みのアドレスが無いとログイン画面を通過できない。
+`Client.login()` はそこを見ないので、
+**近道で入っている間は、この不足に一度も気づけなかった。**
+
+テスト用ユーザーの作り方が実運用とずれている、という点で、
+5章・6章とまったく同じ種類の問題だった。
+
+---
+
 ## この日の教訓
 
 9日目で分かったことは1つです。
@@ -431,3 +655,27 @@ return Authenticator.objects.filter(user=user).exclude(
 ```bash
 python tools/capture_screenshots.py
 ```
+
+### 追記: 公開前の見直しで分かった、もう1つのこと
+
+7章・8章は、テストも画面も正常なまま埋まっていました。
+6日目・9日目の失敗が「**動かして**確かめていなかった」ことだったのに対して、
+こちらは「**壊そうとして**確かめていなかった」ことでした。
+
+| 確かめたこと | 見つかるもの |
+| --- | --- |
+| 意図した手順で動くか | 機能の不足、権限の設定ミス |
+| 意図しない手順で入れないか | 迂回路、要素の数え間違い |
+
+セキュリティの設定は、前者だけでは検証になりません。
+「有効にしたか」ではなく「有効にしたものを回避できないか」を、
+攻撃の手順そのままのテストとして書きます。
+
+```python
+def test_password_alone_cannot_enter_the_admin(self):
+def test_passkey_only_session_cannot_reach_staff_pages(self):
+def test_session_without_any_allauth_record_is_blocked(self):
+```
+
+いずれも修正前のコードに対して `AssertionError: 200 != 302` で落ちます。
+**200 が返っていた**という事実が、そのまま不具合の証拠になります。

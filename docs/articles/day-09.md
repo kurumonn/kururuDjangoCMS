@@ -18,6 +18,20 @@
 **今日いちばん大事なのは、復旧手段を必ず用意すること**です。
 認証を強くするほど、失ったときに戻れなくなります。
 
+そしてもう1つ。**多要素認証は「設定した」だけでは効きません。**
+
+この記事は最初、管理者の判定を「認証手段を登録しているか」だけで書いていました。
+公開前の見直しで、**その判定をすり抜ける経路が2つ**見つかりました。
+
+| すり抜けた経路 | 何が起きていたか |
+| --- | --- |
+| パスキー1本だけでログイン | 2段目の認証が丸ごと飛ぶ。しかも生体認証・PIN の確認は保証されない |
+| Django 標準の管理画面ログイン | allauth を通らないので、パスワードだけで `/admin/` に入れた |
+
+どちらも「登録済みか」しか見ていなかったことが原因です。
+**そのセッションが何によって成立したか**まで見る必要がありました。
+6章で、なぜ気づきにくいのかを含めて書きます。
+
 ---
 
 ## 2. 今日の完成画面
@@ -60,10 +74,12 @@ TOTP の設定画面です。QR コードが出ます。
 
 ```text
 config/settings.py         変更（MFA の設定 / humanize）
+config/urls.py             変更（管理画面のログインを allauth へ差し替え）
 accounts/
 ├── middleware.py          新規（管理者へのMFA必須化）
 ├── checks.py              新規（本番の危険設定を検出）
 ├── apps.py                変更（チェックを登録）
+├── testing.py             新規（本番と同じ経路でログインするヘルパー）
 └── tests_mfa.py           新規
 blog/
 ├── views.py               変更（編集者の権限を修正）
@@ -133,18 +149,34 @@ MFA_REQUIRED_FOR_STAFF = os.environ.get("DJANGO_MFA_REQUIRED_FOR_STAFF", "1") ==
 
 ### 4.2 管理者への必須化ミドルウェア
 
-**詰まないように作ること**が要点です。
+**詰まないように作ること**と、**判定を2段構えにすること**が要点です。
 
 ```python
 # accounts/middleware.py（抜粋）
+
+# パスキーとは独立した要素として数えるログイン方法。
+# ここに載っていない方法は数えない（安全側）。
+INDEPENDENT_LOGIN_METHODS = frozenset({
+    "password",        # パスワード（知識）
+    "password_reset",  # 再設定リンク（メールボックスの所持）
+    "code",            # メールのワンタイムコード（同上）
+    "socialaccount",   # 外部プロバイダー（そちらで認証済み）
+})
+
+
 class StaffMfaRequiredMiddleware:
-    """管理画面へ入れる利用者に、多要素認証の登録を求める。
+    """管理画面へ入れる利用者に、多要素認証を求める。
+
+    判定は2段構え。
+
+      1. 登録 … 認証手段を1つ以上登録しているか
+      2. 成立 … いま使っているセッションが、いくつの要素で成立したか
 
     実装で気を付けること:
 
       * 設定画面そのものを塞がない（塞ぐと設定しに行けない）
       * ログアウトを塞がない（塞ぐと抜け出せない）
-      * 再認証の画面を塞がない（設定画面の手前で止まる）
+      * 再認証の画面を塞がない（追加要素を求める先が塞がると往復する）
       * 静的ファイルを塞がない（CSS が当たらず画面が崩れる）
 
     1つでも通し忘れると、利用者が詰む。
@@ -165,8 +197,8 @@ class StaffMfaRequiredMiddleware:
         ...
     })
 
-    def _has_mfa(self, user) -> bool:
-        """日常的に使える認証手段を登録しているか。
+    def _has_authenticator(self, user) -> bool:
+        """【1段目】日常的に使える認証手段を登録しているか。
 
         リカバリコードは「他の手段を失ったときの控え」であって、
         日常の認証手段ではない。これだけでは設定済みとみなさない。
@@ -178,9 +210,72 @@ class StaffMfaRequiredMiddleware:
             .exclude(type=Authenticator.Type.RECOVERY_CODES)
             .exists()
         )
+
+    @staticmethod
+    def _has_independent_factor(request) -> bool:
+        """【2段目】このセッションが、パスキー以外の要素も通って成立したか。
+
+        allauth はログインの過程で通った方法をセッションへ書き残す
+        （`account_authentication_methods`）。その記録を読む。
+
+        パスキー（webauthn）は数えない。認証時に UV（生体認証・PIN の確認）を
+        強制できない以上、「その認証器を持っている」以上のことを
+        確認できていないため。2本目のパスキーでも、同じ鍵を
+        もう一度触っても、要素は増えない。
+
+        記録が空のセッションも通さない。allauth を経由していない
+        ログインを黙って素通りさせないため。
+        """
+        from allauth.account.authentication import get_authentication_records
+        from allauth.mfa.models import Authenticator
+
+        for record in get_authentication_records(request):
+            method = record.get("method")
+            if method == "mfa":
+                if record.get("type") != Authenticator.Type.WEBAUTHN:
+                    return True  # 認証アプリ・リカバリコード
+            elif method in INDEPENDENT_LOGIN_METHODS:
+                return True
+        return False
 ```
 
-### 4.3 本番で危険な設定を検出するシステムチェック
+2段目に引っかかった管理者は、追加の本人確認へ送ります。
+`?next=` を付けて、確認のあとに元のページへ戻れるようにします。
+
+```python
+if not self._has_independent_factor(request):
+    messages.warning(
+        request,
+        "管理者権限の画面へ進むには、もう一度本人確認が必要です。"
+        "パスキーだけでは、その端末を持っていることしか確認できません。",
+    )
+    target = self._reauthentication_url(user)
+    return redirect(f"{target}?{urlencode({'next': request.get_full_path()})}")
+```
+
+### 4.3 管理画面のログイン画面を差し替える
+
+**ここを開けたままだと、上のミドルウェアは意味を失います。**
+
+```python
+# config/urls.py（抜粋）
+urlpatterns = [
+    # URL は上から順に照合される。admin.site.urls より**前**に置く。
+    # 後ろに置くと admin 側が先に一致して、この行は一生使われない。
+    path(
+        f"{settings.ADMIN_URL_PATH}/login/",
+        RedirectView.as_view(pattern_name="account_login", query_string=True),
+        name="admin_login_redirect",
+    ),
+    path(f"{settings.ADMIN_URL_PATH}/", admin.site.urls),
+    ...
+]
+```
+
+`query_string=True` を落とすと `?next=...` が消え、
+ログイン後に目的のページではなくトップへ戻されます。
+
+### 4.4 本番で危険な設定を検出するシステムチェック
 
 ```python
 # accounts/checks.py（抜粋）
@@ -228,7 +323,7 @@ def check_mfa_settings(app_configs, **kwargs):
     return issues
 ```
 
-### 4.4 編集者の権限を直す
+### 4.5 編集者の権限を直す
 
 **9日目にスクリーンショットを撮ろうとして見つけた不具合です。**
 
@@ -255,7 +350,7 @@ def _can_edit(user, article: Article) -> bool:
     return article.author_id == user.pk
 ```
 
-### 4.5 スクリーンショットの自動撮影
+### 4.6 スクリーンショットの自動撮影
 
 ```python
 # tools/capture_screenshots.py（抜粋）
@@ -372,6 +467,36 @@ MFA_RECOVERY_CODES_SHOW_ONCE = True
 利用者が偽サイトに騙されても、**署名が使い回せません**。
 パスワードや TOTP のコードは、偽サイトへ入力すれば本物へ中継されてしまいます。
 
+**ただし「フィッシングに強い」と「1本で2要素ぶん」は別の話です。**
+
+図の「生体認証などで本人確認」の部分は、**保証されていません**。
+WebAuthn ではこれを UV（User Verification）と呼び、
+サーバーは要求の強さを3段階で指定します。
+
+| 指定 | 意味 | サーバーは検査するか |
+| --- | --- | --- |
+| `required` | 生体認証か PIN を必ず確認すること | する。無ければ失敗 |
+| `preferred` | できれば確認してほしい | **しない** |
+| `discouraged` | 確認しなくてよい | しない |
+
+allauth が**認証時**に使うのは `preferred` です（`begin_authentication`）。
+そして fido2 は `required` のときしか UV フラグを検査しません
+（`Fido2Server.authenticate_complete`）。
+
+```text
+登録時   … user_verification=REQUIRED    ← 確認される
+認証時   … user_verification=PREFERRED   ← 確認されるとは限らない
+```
+
+つまり **PIN を設定していないセキュリティキーなら、拾って挿すだけで通ります**。
+スマートフォンや PC の内蔵認証器は事実上いつも UV を行うので、
+実際に困るのは主に外付けキーですが、
+「登録時に確認したから認証時も安全」は成り立ちません。
+
+だからこの CMS では、パスキー1本を **1要素（持っていること）** として数えます。
+記事を読むだけならそれで十分です。
+管理画面のように権限が強い場所だけ、もう1要素を求めます。
+
 ### `@register(deploy=True)`
 
 ```python
@@ -447,6 +572,100 @@ def test_staff_can_still_reach_mfa_setup(self):
 def test_staff_can_still_log_out(self):
     """ログアウトを塞ぐと詰む。"""
 ```
+
+### パスキー単独ログインで、要素が静かに1つに減る
+
+`MFA_PASSKEY_LOGIN_ENABLED = True` にすると、パスキー1本でログインが完了します。
+便利です。ただし、このとき allauth は**2段目の認証を丸ごと飛ばします**。
+
+```python
+# allauth/mfa/stages.py（抜粋）
+def _should_handle(self, request) -> bool:
+    ...
+    if did_use_passwordless_login(request):
+        return False        # ← 追加認証をしない
+```
+
+これは仕様として正しい判断です。
+パスキーが UV 込みで使われていれば、それ自体が2要素だからです。
+問題は、**UV 込みかどうかを確かめていない**ことでした（5章）。
+
+そして、当初のミドルウェアはこう書いていました。
+
+```python
+return not self._has_authenticator(user)   # 登録しているか、だけ
+```
+
+登録は済んでいます。だから通ります。
+
+```text
+パスキーを拾う
+   ↓ ログイン（PIN 無しでも通る）
+   ↓ 2段目の認証は飛ばされる
+   ↓ ミドルウェア「認証手段は登録済みですね」→ 通過
+管理画面
+```
+
+**「多要素認証を必須にした」と書いたコードが、1要素で通していました。**
+
+直し方は、セッションが何で成立したかを見ることです。
+allauth はログインの過程を `account_authentication_methods` に残しています。
+
+```python
+# パスキー単独ログインの直後
+[{"method": "mfa", "type": "webauthn", "passwordless": True, "id": 3, "at": ...}]
+
+# パスワード＋TOTP でログインした直後
+[{"method": "password", "at": ...},
+ {"method": "mfa", "type": "totp", "id": 1, "at": ...}]
+```
+
+前者は要素が1つ、後者は2つ。この差を読めば判定できます。
+
+同じ鍵をもう一度触っても要素は増えない、という点も大事です。
+再認証の画面にはパスキーの選択肢も出るので、
+「もう一度タップすれば通る」なら対策は形だけになります。
+テストで固定しました。
+
+```python
+def test_tapping_a_passkey_again_is_not_a_second_factor(self):
+    """同じ種類の要素を2回通しても、要素は1つのまま。"""
+```
+
+### 管理画面のログイン画面は allauth を通らない
+
+こちらのほうが影響は大きいものでした。
+
+`admin.site.urls` には **admin 自身のログイン画面**が含まれています。
+これは allauth のログインフローとは別物で、ログインステージを一切通りません。
+
+```text
+/accounts/login/     → allauth → ログインステージ → 2段目の認証 → 完了
+/admin/login/        → Django の LoginView → 完了
+                                              ↑ 2段目が無い
+```
+
+TOTP もパスキーも登録済みのスーパーユーザーで実際に試すと、こうなりました。
+
+```text
+POST /admin/login/  →  302 /admin/
+GET  /admin/        →  200
+session keys: ['_auth_user_backend', '_auth_user_hash', '_auth_user_id']
+```
+
+`account_authentication_methods` がありません。allauth を一度も通っていません。
+**パスワードだけで管理画面に入れていました。**
+
+しかも認証バックエンドは allauth のものが効いているので、
+ユーザー名の欄にメールアドレスを入れても通ります。
+
+対策は 4.3 のとおり、admin のログイン画面を allauth のログインへ差し替えることです。
+`admin.site.urls` より前に置くのが要点で、後ろに置くと一生使われません。
+
+この2つには共通点があります。
+**どちらもテストが通っていて、画面も正常に動いていました。**
+「多要素認証を有効にした」ことは確認していて、
+「有効にした認証を回避できないか」を確認していなかった、という差です。
 
 ### なぜ `DEBUG` に紐づけないのか
 
@@ -731,6 +950,64 @@ ACCOUNT_REAUTHENTICATION_REQUIRED = True
 
 **一時的な侵入が、永続的な侵入に変わります。**
 
+### 迂回路を1本ずつ潰す
+
+多要素認証を有効にしただけでは終わりません。
+**「有効にした認証を通らずに入れる道が残っていないか」**を別に確かめます。
+
+この CMS で見つかった2本は、どちらも「入口が2つあった」という形でした。
+
+| 迂回路 | 塞ぎ方 |
+| --- | --- |
+| `/admin/login/`（allauth を通らない） | allauth のログインへリダイレクト（4.3） |
+| パスキー単独ログイン（2段目が飛ぶ） | セッションの成立要素で判定（4.2） |
+
+確かめ方は「入れないはずの手順で、実際に入ってみる」ことです。
+設定値を読むテストではなく、**攻撃の手順をそのままテストに書きます**。
+
+```python
+def test_password_alone_cannot_enter_the_admin(self):
+    add_totp(self.staff)
+    self.client.post(self.admin_login_url, {...})     # パスワードだけ送る
+    response = self.client.get(f"/{settings.ADMIN_URL_PATH}/")
+    self.assertEqual(response.status_code, 302)       # 入れないこと
+```
+
+修正前のコードに対して、このテストは `AssertionError: 200 != 302` で落ちます。
+**200 が返っていた**という事実が、そのまま不具合の証拠になります。
+
+### テストの近道が、穴を隠すことがある
+
+`Client.login()` と `Client.force_login()` は
+`django.contrib.auth.login()` を直接呼びます。速くて便利ですが、
+**allauth のログインフローを通りません**。
+
+セッションに認証記録が残らないので、
+「セッションが何で成立したか」を見る判定は、記録が空のまま通されます。
+この CMS では、記録が空のセッションも**通さない**ことにしました。
+
+```python
+def test_session_without_any_allauth_record_is_blocked(self):
+    """allauth を通っていないセッションは通さない（安全側に倒す）。"""
+```
+
+締め出しても、ログインし直せば戻れます。
+緩めておくと、将来 `auth.login()` を直接呼ぶコードが増えたときに
+黙って素通りします。**戻れる不便は、気づけない穴より安い**という判断です。
+
+代わりに、テスト側を本番と同じ経路に寄せました。
+
+```python
+# blog/tests/factories.py
+def login_staff(client, user, password=...):
+    """スタッフとして、本番と同じ経路でログインする。"""
+```
+
+これを入れた時点で、既存のテストが3件落ちました。
+`create_staff()` が確認済みのメールアドレスを作っていなかったためです
+（`ACCOUNT_EMAIL_VERIFICATION = "mandatory"` なのに）。
+近道で入っている間は、その不足に気づけませんでした。
+
 ### WebAuthn は HTTPS が前提
 
 ```python
@@ -784,6 +1061,12 @@ QR コードは、それだけで認証アプリに登録できてしまいま�
 
 **問5.** 危険な設定の検出を、テストではなくシステムチェックに置く理由は何ですか。
 
+**問6.** パスキー1本でのログインを、この CMS が「1要素」として数えるのはなぜですか。
+「登録時に生体認証を要求しているから2要素だ」という説明の、どこが誤りですか。
+
+**問7.** 多要素認証を有効にしたのに、`/admin/login/` を残しておくと
+どうなりますか。なぜ画面を見ているだけでは気づけないのですか。
+
 <details>
 <summary>解答</summary>
 
@@ -799,6 +1082,10 @@ WebAuthn の署名には、アクセスしているドメイン名が含まれ�
 本物のサーバーでは検証に失敗します。
 パスワードや TOTP のコードは、偽サイトへ入力された値を
 そのまま本物のサーバーへ中継できてしまいます。
+
+ただし「フィッシングに強い」ことと「1本で2要素ぶん」は別です。
+後者は UV（生体認証・PIN の確認）が行われて初めて言えることで、
+認証時に `user_verification=required` を指定しなければ保証されません。
 
 **問3.**
 リカバリコードは「他の手段を失ったときの控え」であり、
@@ -817,6 +1104,26 @@ WebAuthn の署名には、アクセスしているドメイン名が含まれ�
 システムチェックは `runserver` `migrate` `check --deploy` のたびに必ず走ります。
 「本番で危険な設定になっていないか」は、
 実行し忘れようがない場所に置くべきです。
+
+**問6.**
+認証時に UV が行われる保証が無いためです。
+allauth は登録時に `user_verification=REQUIRED` を指定しますが、
+**認証時は `PREFERRED`** を使います。
+そして fido2 は `REQUIRED` のときしか UV フラグを検査しません。
+
+「登録時に要求した」は、その1回について言えることでしかありません。
+毎回の認証で確認されるかどうかは、認証時の指定で決まります。
+PIN を設定していないセキュリティキーなら、拾って挿すだけで通ります。
+
+**問7.**
+`admin.site.urls` に含まれる admin 自身のログイン画面は、
+allauth のログインフローを通らないため、2段目の認証が実行されません。
+TOTP もパスキーも登録済みの管理者が、パスワードだけで管理画面へ入れます。
+
+画面で気づけないのは、**正しい手順で操作している限り、この経路を通らない**からです。
+`/accounts/login/` からログインすれば、ちゃんと TOTP を求められます。
+迂回路は「わざと変な入り方を試す」までは姿を現しません。
+だからテストに、正規でない手順のほうを書きます。
 
 </details>
 
