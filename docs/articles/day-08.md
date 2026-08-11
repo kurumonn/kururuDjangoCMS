@@ -78,6 +78,48 @@ pip install "django-allauth[mfa,socialaccount]"
 
 `[mfa]` は9日目で使う TOTP とパスキーのためです。今日入れておきます。
 
+`requirements.txt` では版を固定します。この連載は `65.18.0` です。
+
+```text
+django-allauth[mfa,socialaccount]==65.18.0
+```
+
+**追記（2026-08-11）: 上流で `65.19.0` が出ています**（2026-08-06 公開）。
+`IDP_OIDC_ID_TOKEN_EXPIRES_IN` を設定しても読まれず、
+ID トークンの有効期限が常に既定の 300 秒になる、という不具合の修正です。
+
+```python
+# 65.18.0
+def ID_TOKEN_EXPIRES_IN(self) -> int:
+    return 5 * 60                                     # 設定を読んでいない
+
+# 65.19.0
+def ID_TOKEN_EXPIRES_IN(self) -> int:
+    return self._setting("ID_TOKEN_EXPIRES_IN", 5 * 60)
+```
+
+**この CMS は対象外です。** その設定は allauth 自身が OpenID Connect の
+Identity Provider（＝トークンを**発行する**側）として動くときのもので、
+`allauth.idp.oidc` を `INSTALLED_APPS` に入れて初めて関係します。
+この CMS は入れていません。
+Google / GitHub ログインは「発行されたトークンを**受け取る**側」なので、別の話です。
+
+自分が対象かどうかは、**設定名の頭を見る**と分かります。
+`IDP_OIDC_` で始まるものは IdP 側（発行する側）の設定です。
+
+対象外なので、連載中は `65.18.0` のまま据え置きます。
+記事とスクリーンショットがこの版の挙動で書かれており、
+版だけ動かすと記事と実物がずれるためです。
+判断の理由は `requirements.txt` のコメントにも残しました。
+
+ただし**「対象外だから確認しなくてよい」ではありません**。
+確認したうえで対象外だと分かったので据え置く、という順番です。
+自分の環境が対象かどうかは、こう調べられます。
+
+```bash
+python manage.py shell -c "from django.conf import settings; print('allauth.idp.oidc' in settings.INSTALLED_APPS)"
+```
+
 ### 4.2 INSTALLED_APPS と MIDDLEWARE
 
 ```python
