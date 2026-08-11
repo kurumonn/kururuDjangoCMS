@@ -116,6 +116,10 @@ class MfaSettingsTests(TestCase):
 
         self.assertIn("recovery_codes", settings.MFA_SUPPORTED_TYPES)
 
+    def test_mandatory_email_verification_requires_email_field(self):
+        self.assertEqual(settings.ACCOUNT_EMAIL_VERIFICATION, "mandatory")
+        self.assertTrue(settings.ACCOUNT_EMAIL_REQUIRED)
+
     def test_totp_and_webauthn_are_enabled(self):
         from django.conf import settings
 
@@ -530,6 +534,26 @@ class StaffSessionFactorTests(TestCase):
         self.assertEqual(
             self.client.get(reverse("blog:article_list")).status_code, 200
         )
+
+    def test_registered_passkey_does_not_make_password_only_login_admin_ready(self):
+        """A registered key is not proof that this session used the key."""
+        self.client.force_login(self.staff)
+        append_authentication_record(self.client, method="password")
+
+        response = self.client.get(reverse("blog:article_list"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("account_reauthenticate"), response.url)
+
+    def test_stale_authentication_records_do_not_unlock_the_admin(self):
+        force_passkey_only_login(self.client, self.staff, self.passkey)
+        append_authentication_record(
+            self.client,
+            method="password",
+            at=time.time() - settings.ACCOUNT_REAUTHENTICATION_TIMEOUT - 1,
+        )
+
+        response = self.client.get(reverse("blog:article_list"))
+        self.assertEqual(response.status_code, 302)
 
     def test_totp_counts_as_the_second_factor(self):
         force_passkey_only_login(self.client, self.staff, self.passkey)

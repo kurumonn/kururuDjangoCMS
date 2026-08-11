@@ -231,6 +231,24 @@ class AutosaveApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_invalid_content_length_is_a_client_error_not_a_500(self):
+        """Malformed proxy metadata must not crash the autosave endpoint."""
+        from django.test import RequestFactory
+
+        from dashboard.api import AutosaveView
+
+        self.client.login(username="save-owner", password=PASSWORD)
+        request = RequestFactory().post(
+            self.url,
+            data=json.dumps(self._payload()),
+            content_type="application/json",
+            CONTENT_LENGTH="not-a-number",
+        )
+        request.user = self.owner
+        response = AutosaveView.as_view()(request, pk=self.article.pk)
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(json.loads(response.content)["ok"])
+
     # --- 入力検証 -------------------------------------------------------
     def test_broken_json_is_rejected(self):
         self.client.login(username="save-owner", password=PASSWORD)

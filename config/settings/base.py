@@ -167,6 +167,11 @@ LOGOUT_REDIRECT_URL = "/"
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 ACCOUNT_UNIQUE_EMAIL = True
+# `mandatory` email verification is invalid unless the email field is
+# explicitly required.  allauth's system check treats the two settings as a
+# pair; leaving this out prevents every management command and test run from
+# starting at all.
+ACCOUNT_EMAIL_REQUIRED = True
 
 # メール確認を必須にする。
 # "optional" にすると、他人のメールアドレスで登録して

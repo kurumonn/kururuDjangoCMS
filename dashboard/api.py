@@ -53,7 +53,12 @@ class AutosaveView(View):
 
         # --- 4. サイズ ---------------------------------------------------
         # request.body を読む前に Content-Length で門前払いする。
-        content_length = int(request.META.get("CONTENT_LENGTH") or 0)
+        try:
+            content_length = int(request.META.get("CONTENT_LENGTH") or 0)
+        except (TypeError, ValueError):
+            return _error("Content-Length が不正です。", 400)
+        if content_length < 0:
+            return _error("Content-Length が不正です。", 400)
         if content_length > MAX_PAYLOAD_BYTES:
             return _error("内容が大きすぎます。", 413)
 

@@ -47,6 +47,8 @@ fido2 は REQUIRED のときしか UV フラグを検査しません
 
 from __future__ import annotations
 
+import time
+
 from django.conf import settings
 from django.contrib import messages
 from django.shortcuts import redirect
@@ -175,14 +177,43 @@ class StaffMfaRequiredMiddleware:
         from allauth.account.authentication import get_authentication_records
         from allauth.mfa.models import Authenticator
 
+        # Authentication records are append-only session metadata.  Reading
+        # "any record ever" would let a password/TOTP completed months ago
+        # unlock the admin for the lifetime of a remembered session.  Keep the
+        # same freshness window as allauth's reauthentication flow.
+        timeout = float(getattr(settings, "ACCOUNT_REAUTHENTICATION_TIMEOUT", 300))
+        records = []
+        now = time.time()
         for record in get_authentication_records(request):
+            try:
+                age = now - float(record.get("at"))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= age < timeout:
+                records.append(record)
+
+        has_webauthn = False
+        has_non_webauthn_mfa = False
+        has_independent_login = False
+        for record in records:
             method = record.get("method")
             if method == "mfa":
-                if record.get("type") != Authenticator.Type.WEBAUTHN:
-                    return True  # 認証アプリ・リカバリコード
+                if record.get("type") == Authenticator.Type.WEBAUTHN:
+                    has_webauthn = True
+                elif record.get("type") == Authenticator.Type.TOTP:
+                    # Recovery codes are emergency fallback material, not a
+                    # daily second factor for a staff session.  Unknown future
+                    # MFA types stay blocked until their policy is explicit.
+                    has_non_webauthn_mfa = True
             elif method in INDEPENDENT_LOGIN_METHODS:
-                return True
-        return False
+                has_independent_login = True
+
+        # A non-WebAuthn MFA completion is sufficient because the account
+        # already passed the registration check above.  A password/email/social
+        # factor is sufficient only when this same session also contains a
+        # fresh WebAuthn login record; a registered key that was never used
+        # must not turn password-only login into admin access.
+        return has_non_webauthn_mfa or (has_webauthn and has_independent_login)
 
     @staticmethod
     def _reauthentication_url(user) -> str:

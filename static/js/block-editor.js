@@ -271,7 +271,21 @@
       body: JSON.stringify(payload)
     })
       .then(function (response) {
-        return response.json().then(function (body) {
+        // CSRF failures and expired sessions can be rendered as HTML by
+        // Django.  Calling response.json() unconditionally turned those into
+        // a misleading generic network error and left the user unsure whether
+        // the draft was saved.  Parse JSON when available and provide a
+        // deterministic message for a non-JSON response.
+        return response.text().then(function (raw) {
+          var body;
+          try {
+            body = raw ? JSON.parse(raw) : {};
+          } catch (e) {
+            body = {};
+          }
+          if (!body.error && response.status === 403) {
+            body.error = "ログイン状態またはCSRFトークンが期限切れです。ページを再読み込みしてから保存してください。";
+          }
           return { status: response.status, body: body };
         });
       })
