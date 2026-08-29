@@ -1,0 +1,9 @@
+html[data-theme="glass"] {
+  --bg: #eaf2ff;
+  --surface: rgb(255 255 255 / 82%);
+  --text: #18243b;
+  --muted: #53627b;
+  --border: rgb(109 135 174 / 38%);
+}
+html[data-theme="glass"] .site-header,
+html[data-theme="glass"] .article { backdrop-filter: blur(14px); }

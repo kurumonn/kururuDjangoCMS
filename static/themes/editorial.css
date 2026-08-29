@@ -1,0 +1,9 @@
+html[data-theme="editorial"] {
+  --bg: #f5f1e8;
+  --surface: #fffdf8;
+  --text: #211f1b;
+  --muted: #625d53;
+  --border: #cbc2b2;
+  font-family: Georgia, "Yu Mincho", serif;
+}
+html[data-theme="editorial"] .article__body { line-height: 1.95; }

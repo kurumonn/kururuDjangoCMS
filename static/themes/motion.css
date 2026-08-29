@@ -1,0 +1,17 @@
+html[data-theme="motion"] {
+  --bg: #f7f4ff;
+  --surface: #ffffff;
+  --text: #25164a;
+  --muted: #66568a;
+  --border: #d9cff1;
+}
+html[data-theme="motion"][data-motion="enabled"] .article {
+  animation: kururu-theme-enter 360ms ease-out both;
+}
+@keyframes kururu-theme-enter {
+  from { opacity: 0; transform: translateY(0.5rem); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="motion"] .article { animation: none; }
+}

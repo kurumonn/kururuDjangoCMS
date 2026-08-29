@@ -45,15 +45,18 @@ def article_json_ld(context, article) -> str:
 
         setting = SiteSetting.load()
 
+    canonical_url = article.canonical_url or setting.absolute_url(
+        article.get_absolute_url()
+    )
     data = {
         "@context": "https://schema.org",
         "@type": "BlogPosting",
         "headline": article.display_seo_title,
         "description": article.display_seo_description,
-        "url": setting.absolute_url(article.get_absolute_url()),
+        "url": canonical_url,
         "mainEntityOfPage": {
             "@type": "WebPage",
-            "@id": setting.absolute_url(article.get_absolute_url()),
+            "@id": canonical_url,
         },
         "author": {"@type": "Person", "name": article.author.byline},
         "publisher": {"@type": "Organization", "name": setting.site_name},
@@ -72,7 +75,38 @@ def article_json_ld(context, article) -> str:
     if keywords:
         data["keywords"] = ", ".join(keywords)
 
-    return mark_safe(_dump_json_ld(data))
+    # _dump_json_ld escapes '<', including every possible closing script tag.
+    return mark_safe(_dump_json_ld(data))  # nosec B308 B703
+
+
+@register.simple_tag(takes_context=True)
+def page_json_ld(context, page) -> str:
+    """固定ページのWebPage構造化データを安全なJSONとして返す。"""
+    setting = context.get("site_setting")
+    if setting is None:
+        from seo.models import SiteSetting
+
+        setting = SiteSetting.load()
+
+    canonical_url = page.canonical_url or setting.absolute_url(page.get_absolute_url())
+    data = {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "name": page.display_seo_title,
+        "description": page.display_seo_description,
+        "url": canonical_url,
+        "inLanguage": "ja",
+        "dateModified": page.updated_at.isoformat(),
+    }
+    if page.published_at:
+        data["datePublished"] = page.published_at.isoformat()
+    if page.display_og_image:
+        data["primaryImageOfPage"] = {
+            "@type": "ImageObject",
+            "url": setting.absolute_url(page.display_og_image.file.url),
+        }
+    # _dump_json_ld escapes '<', including every possible closing script tag.
+    return mark_safe(_dump_json_ld(data))  # nosec B308 B703
 
 
 @register.simple_tag(takes_context=True)
@@ -100,7 +134,8 @@ def breadcrumb_json_ld(context, crumbs) -> str:
             for index, (name, path) in enumerate(crumbs, start=1)
         ],
     }
-    return mark_safe(_dump_json_ld(data))
+    # _dump_json_ld escapes '<', including every possible closing script tag.
+    return mark_safe(_dump_json_ld(data))  # nosec B308 B703
 
 
 @register.simple_tag(takes_context=True)

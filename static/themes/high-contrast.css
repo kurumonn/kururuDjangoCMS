@@ -1,0 +1,10 @@
+html[data-theme="high-contrast"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --text: #000000;
+  --muted: #303030;
+  --border: #000000;
+}
+html[data-theme="high-contrast"] a { text-decoration: underline; text-decoration-thickness: 0.13em; }
+html[data-theme="high-contrast"] :focus-visible { outline: 3px solid #000000; outline-offset: 3px; }

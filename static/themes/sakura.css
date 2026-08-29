@@ -1,0 +1,8 @@
+html[data-theme="sakura"] {
+  --bg: #fff7fa;
+  --surface: #ffffff;
+  --text: #3b202c;
+  --muted: #765463;
+  --border: #e8c8d5;
+}
+html[data-theme="sakura"] .article { border-radius: 1.25rem; }

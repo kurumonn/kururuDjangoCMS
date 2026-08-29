@@ -1,5 +1,6 @@
 {% load static seo_tags %}<!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" data-theme="{{ active_theme.key }}"
+      data-motion="{% if site_setting.enable_motion %}enabled{% else %}disabled{% endif %}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -41,12 +42,19 @@
   {# 外部CDNを一切使わない。すべて自ホストから配信するため、  #}
   {# 10日目で導入する Content-Security-Policy が緩まずに済む。 #}
   <link rel="stylesheet" href="{% static 'css/site.css' %}">
+  <link rel="stylesheet" href="{% static active_theme.css_path %}">
   {# サイト設定で決めたアクセント色だけを差し込む。            #}
   {# 値は #rrggbb 形式に検証済みなので、CSS へ注入されない。    #}
   <style nonce="{{ request.csp_nonce }}">
-    :root { --accent: {{ site_setting.accent_color }}; }
+    html[data-theme] {
+      --accent: {{ site_setting.accent_color }};
+      --accent-fg: {{ accent_foreground }};
+    }
     @media (prefers-color-scheme: dark) {
-      :root { --accent: {{ site_setting.accent_color_dark }}; }
+      html[data-theme] {
+        --accent: {{ site_setting.accent_color_dark }};
+        --accent-fg: {{ accent_foreground_dark }};
+      }
     }
   </style>
 

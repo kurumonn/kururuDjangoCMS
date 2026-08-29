@@ -1,0 +1,7 @@
+html[data-theme="clean"] {
+  --bg: #f7f8fb;
+  --surface: #ffffff;
+  --text: #172033;
+  --muted: #5f6b7a;
+  --border: #d9dee8;
+}

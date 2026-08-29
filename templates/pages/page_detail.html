@@ -1,6 +1,30 @@
 {% extends "base.html" %}
+{% load seo_tags %}
 
-{% block title %}{{ page.title }} | KururuCMS{% endblock %}
+{% block title %}{{ page.display_seo_title }} | {{ site_setting.site_name }}{% endblock %}
+{% block meta_description %}{{ page.display_seo_description }}{% endblock %}
+
+{% block canonical %}
+  <link rel="canonical" href="{% if page.canonical_url %}{{ page.canonical_url }}{% else %}{% absolute_url page.get_absolute_url %}{% endif %}">
+{% endblock %}
+
+{% block og_title %}{{ page.display_seo_title }}{% endblock %}
+{% block og_description %}{{ page.display_seo_description }}{% endblock %}
+{% block og_image %}
+  {% if page.display_og_image %}
+    <meta property="og:image" content="{% absolute_url page.display_og_image.file.url %}">
+    <meta property="og:image:alt" content="{{ page.display_og_image.display_alt }}">
+  {% elif site_setting.default_og_image %}
+    <meta property="og:image" content="{% absolute_url site_setting.default_og_image.file.url %}">
+  {% endif %}
+{% endblock %}
+
+{% block head_extra %}
+  {% if page.noindex or page.status != "published" %}
+    <meta name="robots" content="noindex, nofollow">
+  {% endif %}
+  <script type="application/ld+json" nonce="{{ request.csp_nonce }}">{% page_json_ld page %}</script>
+{% endblock %}
 
 {% block content %}
   <article class="article">

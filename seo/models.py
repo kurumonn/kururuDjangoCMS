@@ -12,6 +12,8 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 
+from .themes import DEFAULT_THEME_KEY, validate_theme_key
+
 # CSS へ差し込む色は自由入力にしない。
 # 任意の文字列を CSS に埋め込めると、そこから CSS インジェクションが成立する。
 HEX_COLOR = RegexValidator(
@@ -51,6 +53,17 @@ class SiteSetting(models.Model):
     )
     accent_color_dark = models.CharField(
         "アクセント色（ダーク）", max_length=7, default="#60a5fa", validators=[HEX_COLOR]
+    )
+    theme_key = models.CharField(
+        "テーマ",
+        max_length=40,
+        default=DEFAULT_THEME_KEY,
+        validators=[validate_theme_key],
+    )
+    enable_motion = models.BooleanField(
+        "アニメーションを有効にする",
+        default=False,
+        help_text="利用者の「動きを減らす」設定は常に優先されます。",
     )
 
     show_sidebar = models.BooleanField("サイドバーを表示", default=True)

@@ -10,3 +10,20 @@ class PageAdmin(admin.ModelAdmin):
     search_fields = ("title", "body")
     prepopulated_fields = {"slug": ("title",)}
     date_hierarchy = "published_at"
+    fieldsets = (
+        (None, {"fields": ("title", "slug", "body")}),
+        ("公開", {"fields": ("status", "published_at", "show_in_footer", "menu_order")}),
+        (
+            "SEO",
+            {
+                "classes": ("collapse",),
+                "fields": (
+                    "seo_title",
+                    "seo_description",
+                    "canonical_url",
+                    "og_image",
+                    "noindex",
+                ),
+            },
+        ),
+    )

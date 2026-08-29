@@ -67,7 +67,7 @@ class ArticleSitemap(ConfiguredDomainSitemap):
     def items(self):
         # published() を通す。ここを .all() にすると下書きが漏れる。
         # noindex を指定した記事も載せない（載せたうえで noindex は矛盾する）。
-        return Article.objects.published().filter(noindex=False)
+        return Article.objects.published().filter(noindex=False, canonical_url="")
 
     def lastmod(self, obj: Article):
         return obj.updated_at
@@ -81,7 +81,7 @@ class PageSitemap(ConfiguredDomainSitemap):
     priority = 0.5
 
     def items(self):
-        return Page.objects.published()
+        return Page.objects.published().filter(noindex=False, canonical_url="")
 
     def lastmod(self, obj: Page):
         return obj.updated_at

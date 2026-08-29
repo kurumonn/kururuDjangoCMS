@@ -1,0 +1,8 @@
+html[data-theme="midnight"] {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --surface: #141b2d;
+  --text: #edf2ff;
+  --muted: #a8b3cf;
+  --border: #2a3550;
+}

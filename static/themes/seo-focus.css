@@ -1,0 +1,10 @@
+html[data-theme="seo-focus"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --text: #111827;
+  --muted: #4b5563;
+  --border: #d1d5db;
+  font-size: 17px;
+}
+html[data-theme="seo-focus"] .container { max-width: 72rem; }
+html[data-theme="seo-focus"] .article { max-width: 46rem; }

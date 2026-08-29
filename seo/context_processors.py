@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from django.core.cache import cache
 
+from .contrast import readable_foreground
 from .models import SiteSetting
+from .themes import resolve_theme
 
 SIDEBAR_CACHE_KEY = "seo:sidebar"
 SIDEBAR_CACHE_SECONDS = 60
@@ -29,7 +31,13 @@ def get_site_setting(request) -> SiteSetting:
 
 def site_settings(request):
     """サイト設定。"""
-    return {"site_setting": get_site_setting(request)}
+    setting = get_site_setting(request)
+    return {
+        "site_setting": setting,
+        "active_theme": resolve_theme(setting.theme_key),
+        "accent_foreground": readable_foreground(setting.accent_color),
+        "accent_foreground_dark": readable_foreground(setting.accent_color_dark),
+    }
 
 
 def sidebar(request):

@@ -11,6 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from blog.utils import unique_slugify
+from seo.validators import validate_canonical_url
 
 
 class PageQuerySet(models.QuerySet):
@@ -32,6 +33,37 @@ class Page(models.Model):
     title = models.CharField("タイトル", max_length=200)
     slug = models.SlugField("スラッグ", max_length=220, unique=True, blank=True)
     body = models.TextField("本文")
+
+    seo_title = models.CharField(
+        "SEOタイトル",
+        max_length=70,
+        blank=True,
+        default="",
+        help_text="空なら固定ページのタイトルを使います。",
+    )
+    seo_description = models.CharField(
+        "SEO説明文",
+        max_length=160,
+        blank=True,
+        default="",
+        help_text="空なら本文の冒頭を使います。",
+    )
+    canonical_url = models.URLField(
+        "正規URL",
+        blank=True,
+        default="",
+        help_text="別URLを正規とする場合だけ指定します。",
+        validators=[validate_canonical_url],
+    )
+    noindex = models.BooleanField("検索エンジンから除外", default=False)
+    og_image = models.ForeignKey(
+        "media_library.MediaAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="og_pages",
+        verbose_name="OG画像",
+    )
 
     status = models.CharField(
         "公開状態", max_length=20, choices=Status.choices, default=Status.DRAFT
@@ -61,3 +93,18 @@ class Page(models.Model):
 
     def get_absolute_url(self) -> str:
         return reverse("pages:detail", kwargs={"slug": self.slug})
+
+    @property
+    def display_seo_title(self) -> str:
+        return self.seo_title or self.title
+
+    @property
+    def display_seo_description(self) -> str:
+        if self.seo_description:
+            return self.seo_description
+        flattened = " ".join(self.body.split())
+        return flattened[:157] + "…" if len(flattened) > 160 else flattened
+
+    @property
+    def display_og_image(self):
+        return self.og_image

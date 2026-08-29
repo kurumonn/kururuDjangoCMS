@@ -11,14 +11,26 @@ import re
 from datetime import timedelta
 
 from django.core.cache import cache
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.contrib.admin.sites import AdminSite
+from django.test import RequestFactory
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from blog.models import Article
-from blog.tests.factories import create_article, create_category, create_tag
+from blog.tests.factories import (
+    create_article,
+    create_category,
+    create_staff,
+    create_tag,
+)
+from pages.models import Page
 
+from .admin import SiteSettingAdmin
+from .contrast import contrast_ratio, readable_foreground
 from .models import SiteSetting
+from .themes import THEMES
 
 
 class CacheClearingTestCase(TestCase):
@@ -82,6 +94,51 @@ class SiteSettingTests(CacheClearingTestCase):
         with self.assertRaises(ValidationError):
             setting.delete()
 
+    def test_all_registered_themes_render_from_static_allowlist(self):
+        setting = SiteSetting.load()
+        for theme in THEMES:
+            with self.subTest(theme=theme.key):
+                setting.theme_key = theme.key
+                setting.full_clean()
+                setting.save()
+                response = self.client.get(reverse("blog:article_list"))
+                self.assertContains(response, f'data-theme="{theme.key}"')
+                self.assertContains(response, theme.css_path)
+
+    def test_unknown_theme_is_rejected(self):
+        setting = SiteSetting.load()
+        setting.theme_key = "../../evil.css"
+        with self.assertRaises(ValidationError):
+            setting.full_clean()
+
+    def test_accent_foreground_meets_normal_text_contrast(self):
+        for background in ("#2563eb", "#60a5fa", "#d9467b", "#777777"):
+            foreground = readable_foreground(background)
+            self.assertGreaterEqual(contrast_ratio(background, foreground), 4.5)
+
+    def test_permissionless_staff_cannot_add_missing_singleton(self):
+        SiteSetting.objects.all().delete()
+        request = RequestFactory().get("/admin/seo/sitesetting/")
+        request.user = create_staff(username="theme-viewer")
+        model_admin = SiteSettingAdmin(SiteSetting, AdminSite())
+
+        self.assertFalse(model_admin.has_add_permission(request))
+        with self.assertRaises(PermissionDenied):
+            model_admin.changelist_view(request)
+        self.assertEqual(SiteSetting.objects.count(), 0)
+
+    def test_theme_style_uses_csp_nonce_and_accessible_foreground(self):
+        setting = SiteSetting.load()
+        setting.accent_color = "#60a5fa"
+        setting.enable_motion = True
+        setting.save()
+
+        response = self.client.get(reverse("blog:article_list"))
+
+        self.assertContains(response, 'data-motion="enabled"')
+        self.assertContains(response, 'nonce="')
+        self.assertContains(response, "--accent-fg: #000000")
+
 
 class SeoFallbackTests(CacheClearingTestCase):
     def setUp(self):
@@ -141,6 +198,18 @@ class MetaTagTests(CacheClearingTestCase):
         )
         response = self.client.get(article.get_absolute_url())
         self.assertContains(response, "https://original.example/post")
+
+    def test_canonical_rejects_non_http_credentials_and_fragments(self):
+        article = create_article(title="canonical validation", category=self.category)
+        for value in (
+            "ftp://example.com/article",
+            "https://user:password@example.com/article",
+            "https://example.com/article#fragment",
+        ):
+            with self.subTest(value=value):
+                article.canonical_url = value
+                with self.assertRaises(ValidationError):
+                    article.full_clean()
 
     def test_noindex_article_emits_meta_robots(self):
         article = create_article(
@@ -234,6 +303,43 @@ class JsonLdTests(CacheClearingTestCase):
         posting = next(b for b in blocks if b["@type"] == "BlogPosting")
         self.assertTrue(posting["url"].startswith("https://cms.example.com/"))
 
+    def test_external_canonical_is_used_by_link_and_json_ld(self):
+        article = create_article(
+            title="外部canonical",
+            category=self.category,
+            canonical_url="https://original.example/article",
+        )
+        response = self.client.get(article.get_absolute_url())
+        blocks = self._extract_json_ld(response.content.decode())
+        posting = next(b for b in blocks if b["@type"] == "BlogPosting")
+
+        self.assertContains(response, 'href="https://original.example/article"')
+        self.assertEqual(posting["url"], "https://original.example/article")
+        self.assertEqual(
+            posting["mainEntityOfPage"]["@id"],
+            "https://original.example/article",
+        )
+
+    def test_page_metadata_and_json_ld_use_same_canonical(self):
+        page = Page.objects.create(
+            title="会社概要",
+            body="会社概要の説明です。",
+            seo_title="会社情報",
+            seo_description="会社の事業内容と所在地をご案内します。",
+            canonical_url="https://original.example/company",
+            status=Page.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+
+        response = self.client.get(page.get_absolute_url())
+        blocks = self._extract_json_ld(response.content.decode())
+        webpage = next(block for block in blocks if block["@type"] == "WebPage")
+
+        self.assertContains(response, "会社情報 |")
+        self.assertContains(response, page.seo_description)
+        self.assertContains(response, 'href="https://original.example/company"')
+        self.assertEqual(webpage["url"], "https://original.example/company")
+
 
 class SitemapTests(CacheClearingTestCase):
     def setUp(self):
@@ -273,6 +379,34 @@ class SitemapTests(CacheClearingTestCase):
         )
         response = self.client.get(self.url)
         self.assertNotContains(response, hidden.get_absolute_url())
+
+    def test_external_canonical_article_is_not_listed(self):
+        article = create_article(
+            title="転載記事",
+            category=self.category,
+            canonical_url="https://original.example/article",
+        )
+        response = self.client.get(self.url)
+        self.assertNotContains(response, article.get_absolute_url())
+
+    def test_noindex_and_external_canonical_pages_are_not_listed(self):
+        hidden = Page.objects.create(
+            title="非掲載ページ",
+            body="本文",
+            status=Page.Status.PUBLISHED,
+            published_at=timezone.now(),
+            noindex=True,
+        )
+        elsewhere = Page.objects.create(
+            title="転載ページ",
+            body="本文",
+            status=Page.Status.PUBLISHED,
+            published_at=timezone.now(),
+            canonical_url="https://original.example/page",
+        )
+        response = self.client.get(self.url)
+        self.assertNotContains(response, hidden.get_absolute_url())
+        self.assertNotContains(response, elsewhere.get_absolute_url())
 
     def test_empty_category_is_not_listed(self):
         empty = create_category(name="空カテゴリ")

@@ -1,11 +1,23 @@
+from django import forms
 from django.contrib import admin
+from django.core.exceptions import PermissionDenied
 
 from .models import SiteSetting
+from .themes import theme_choices
+
+
+class SiteSettingAdminForm(forms.ModelForm):
+    theme_key = forms.ChoiceField(label="テーマ", choices=theme_choices)
+
+    class Meta:
+        model = SiteSetting
+        fields = "__all__"
 
 
 @admin.register(SiteSetting)
 class SiteSettingAdmin(admin.ModelAdmin):
     """設定は1行だけ。追加・削除の口を塞ぐ。"""
+    form = SiteSettingAdminForm
 
     fieldsets = (
         ("サイト情報", {"fields": ("site_name", "tagline", "description", "base_url")}),
@@ -14,6 +26,8 @@ class SiteSettingAdmin(admin.ModelAdmin):
             "fields": (
                 "accent_color",
                 "accent_color_dark",
+                "theme_key",
+                "enable_motion",
                 "show_sidebar",
                 "sidebar_recent_count",
             )
@@ -23,7 +37,7 @@ class SiteSettingAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         # すでに1行あるなら追加させない。
-        return not SiteSetting.objects.exists()
+        return super().has_add_permission(request) and not SiteSetting.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
         return False
@@ -33,7 +47,11 @@ class SiteSettingAdmin(admin.ModelAdmin):
         from django.shortcuts import redirect
         from django.urls import reverse
 
-        setting = SiteSetting.load()
+        setting = SiteSetting.objects.first()
+        if setting is None:
+            if self.has_add_permission(request):
+                return redirect(reverse("admin:seo_sitesetting_add"))
+            raise PermissionDenied("サイト設定を追加する権限がありません。")
         return redirect(
             reverse("admin:seo_sitesetting_change", args=[setting.pk])
         )

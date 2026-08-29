@@ -1,0 +1,9 @@
+html[data-theme="cyber-neon"] {
+  color-scheme: dark;
+  --bg: #070b12;
+  --surface: #101827;
+  --text: #e6fff8;
+  --muted: #9ac7bd;
+  --border: #1c6b5b;
+}
+html[data-theme="cyber-neon"] .site-header { box-shadow: 0 1px 18px rgb(38 255 196 / 18%); }
