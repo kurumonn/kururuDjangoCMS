@@ -226,7 +226,7 @@ ACCOUNT_RATE_LIMITS = {
     "signup": "5/h/ip",
     "send_email": "10/h",
     "change_email": "3/h",
-    "reset_password": "5/h/ip,3/h/key",
+    "reset_password": "5/h/ip,3/h/key",  # pragma: allowlist secret
     "confirm_email": "5/m/key",
     "request_login_code": "3/5m/key",    # ワンタイムコードの発行
 }

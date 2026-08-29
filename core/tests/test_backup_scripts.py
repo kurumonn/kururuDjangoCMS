@@ -48,7 +48,7 @@ class BackupScriptSecurityTests(SimpleTestCase):
         example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
         self.assertIn(
-            "BACKUP_ENCRYPTION_KEY_FILE=/etc/kururucms/backup-passphrase",
+            "BACKUP_ENCRYPTION_KEY_FILE=/etc/kururucms/backup-passphrase",  # pragma: allowlist secret
             example,
         )
 
