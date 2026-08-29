@@ -351,7 +351,7 @@ if not SECRET_KEY:
         raise RuntimeError(
             "DJANGO_SECRET_KEY が未設定です。本番では環境変数で必ず指定してください。"
         )
-    SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"
+    SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"  # pragma: allowlist secret
 
 ALLOWED_HOSTS = [
     h.strip()
@@ -811,7 +811,7 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 if not SECRET_KEY:
     if not DEBUG:
         raise RuntimeError("DJANGO_SECRET_KEY が未設定です。")
-    SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"
+    SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"  # pragma: allowlist secret
 ```
 
 `DEBUG=False`（本番）で環境変数が無ければ **起動しない** ようにしています。

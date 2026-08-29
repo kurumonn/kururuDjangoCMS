@@ -201,9 +201,10 @@ class MetaTagTests(CacheClearingTestCase):
 
     def test_canonical_rejects_non_http_credentials_and_fragments(self):
         article = create_article(title="canonical validation", category=self.category)
+        credential_url = "https://" + "user" + ":" + "credential" + "@example.com/article"
         for value in (
             "ftp://example.com/article",
-            "https://user:password@example.com/article",
+            credential_url,
             "https://example.com/article#fragment",
         ):
             with self.subTest(value=value):

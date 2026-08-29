@@ -240,7 +240,7 @@ SOCIALACCOUNT_PROVIDERS = {
     "google": {
         "APP": {
             "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
-            "secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+            "secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),  # pragma: allowlist secret
             "key": "",
         },
         "SCOPE": ["profile", "email"],
@@ -248,7 +248,7 @@ SOCIALACCOUNT_PROVIDERS = {
     "github": {
         "APP": {
             "client_id": os.environ.get("GITHUB_CLIENT_ID", ""),
-            "secret": os.environ.get("GITHUB_CLIENT_SECRET", ""),
+            "secret": os.environ.get("GITHUB_CLIENT_SECRET", ""),  # pragma: allowlist secret
             "key": "",
         },
         "SCOPE": ["user:email"],
@@ -707,7 +707,7 @@ AssertionError: '' is not true : メール本文にコードが見つからな�
 
 ```python
 "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
-"secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+"secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),  # pragma: allowlist secret
 ```
 
 `settings.py` は Git に入ります。

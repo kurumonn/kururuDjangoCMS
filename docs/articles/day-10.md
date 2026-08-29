@@ -179,7 +179,7 @@ DEBUG = True
 # 開発用の固定キー。
 # "django-insecure-" で始めているのは Django の慣習で、
 # `manage.py check --deploy` がこの接頭辞を見て警告を出してくれるため。
-SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"
+SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"  # pragma: allowlist secret
 
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
 

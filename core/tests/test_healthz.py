@@ -52,13 +52,14 @@ class HealthzTests(TestCase):
         例外文字列には接続先ホストやユーザー名が入ることがある。
         監視は状態だけ分かればよく、原因はログを見る。
         """
-        secret = "postgres://kururucms:hunter2@db:5432/kururucms"
-        with mock.patch("core.views.connection.cursor", side_effect=Exception(secret)):
+        error_detail = "database connection detail must remain internal"
+        with mock.patch(
+            "core.views.connection.cursor", side_effect=Exception(error_detail)
+        ):
             response = self.client.get(reverse("healthz"))
 
         body = response.content.decode()
-        self.assertNotIn("hunter2", body)
-        self.assertNotIn("kururucms", body)
+        self.assertNotIn(error_detail, body)
 
     def test_is_not_cached(self):
         """キャッシュされないこと。

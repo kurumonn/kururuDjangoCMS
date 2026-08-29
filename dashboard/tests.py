@@ -27,7 +27,7 @@ from blog.tests.factories import (
 )
 from comments.models import Comment
 
-PASSWORD = "test-pass-phrase-1234"
+PASSWORD = "test-pass-phrase-1234"  # pragma: allowlist secret
 
 
 class DashboardViewTests(TestCase):

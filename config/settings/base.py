@@ -244,8 +244,8 @@ ACCOUNT_RATE_LIMITS = {
     "send_email": "10/h",
     "change_email": "3/h",
     "manage_email": "10/m/user",
-    "reset_password": "5/h/ip,3/h/key",
-    "reset_password_from_key": "10/m/ip",
+    "reset_password": "5/h/ip,3/h/key",  # pragma: allowlist secret
+    "reset_password_from_key": "10/m/ip",  # pragma: allowlist secret
     "confirm_email": "5/m/key",
     "request_login_code": "3/5m/key",  # ワンタイムコードの発行
 }

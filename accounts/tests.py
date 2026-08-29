@@ -248,7 +248,13 @@ class RateLimitTests(TestCase):
     def test_failed_logins_are_rate_limited(self):
         url = reverse("account_login")
         for _ in range(10):
-            self.client.post(url, {"login": "rate@example.com", "password": "wrong"})
+            self.client.post(
+                url,
+                {
+                    "login": "rate@example.com",
+                    "password": "wrong",  # pragma: allowlist secret
+                },
+            )
 
         # 制限にかかった後は、正しいパスワードでも通さない。
         response = self.client.post(

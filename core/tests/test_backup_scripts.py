@@ -75,7 +75,7 @@ class BackupScriptSecurityTests(SimpleTestCase):
             tmp = Path(tmp_dir)
             key = tmp / "backup-passphrase"
             payload = tmp / "backup.dump.enc"
-            key.write_bytes(b"test-only-backup-key")
+            key.write_bytes(bytes(range(32)))
             payload.write_bytes(b"original encrypted payload")
 
             original = subprocess.run(
