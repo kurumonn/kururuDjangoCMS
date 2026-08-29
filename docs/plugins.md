@@ -79,21 +79,29 @@ wheelの固定・インストールとmigrationを確認した後、専用Compos
 
     docker compose --profile contact-forms up -d --build
 
-`contact_forms_worker`はDB Outboxを読み、失敗した配送を指数バックオフ付きで再試行します。
+`contact_forms_worker`はDB Outboxを読み、SMTPが明示的な例外を返した配送を
+指数バックオフ付きで再試行します。
 `contact_forms_maintenance`は起動時と24時間ごとに保存期限切れデータを削除します。
-両サービスのhealthcheckは、停止した配送、最大試行回数に達した配送、保守処理の失敗・
-長期未実行を検知します。コンテナのunhealthy状態は外部監視から通知してください。
+両サービスのhealthcheckは、停止した配送、結果不明・最大試行回数到達の配送、
+保守処理の失敗・長期未実行を検知します。さらにホストから次を5分間隔で実行し、
+非0終了を外部監視へ通知してください。
+
+    ./scripts/check_contact_forms_runtime.sh
 ComposeではDB/Redis用の`backend`を内部ネットワークに保ったまま、SMTP配送workerだけを
 `mail_egress`へ接続します。Webと保守プロセスには外向きネットワークを付与しません。
 
-手動復旧時は、最初にSMTP障害等の原因を直し、対象IDだけを再投入します。
+明示的なSMTP例外で失敗した配送は、原因を直して対象IDだけを再投入します。
 
     python manage.py retry_contact_mail_delivery <delivery_id>
     python manage.py check_contact_forms_health
 
 SMTPサーバーが受信した直後、送信済み状態をDBへ記録する前にワーカーが停止した場合は、
-同じメールを再送する可能性があります。HTTPの冪等キーは問い合わせ・配送ジョブの重複を
-防ぎますが、SMTP自体はat-least-once配送です。
+期限切れleaseを`unknown`へ隔離し、自動再送しません。配送事業者のログと固定Message-IDを
+照合して、受理済みなら送信済み確定、未受理と判断して再送する場合だけ重複リスクを
+明示確認します。
+
+    python manage.py resolve_contact_mail_delivery <delivery_id> --action mark-sent
+    python manage.py resolve_contact_mail_delivery <delivery_id> --action retry --confirm-duplicate-risk
 
 ## 互換性変更
 

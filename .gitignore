@@ -16,6 +16,8 @@ db.sqlite3-journal
 .env
 .env.*
 !.env.example
+!.env.db-admin.example
+!.env.db-migration.example
 *.pem
 *.key
 *.p12

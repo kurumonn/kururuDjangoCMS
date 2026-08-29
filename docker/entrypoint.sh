@@ -17,12 +17,17 @@ import time
 
 import psycopg
 
+role_prefix = (
+    "POSTGRES_MIGRATION"
+    if os.environ.get("APP_START_MODE") == "migrate"
+    else "POSTGRES_APP"
+)
 dsn = (
     f"host={os.environ.get('POSTGRES_HOST', 'db')} "
     f"port={os.environ.get('POSTGRES_PORT', '5432')} "
     f"dbname={os.environ['POSTGRES_DB']} "
-    f"user={os.environ['POSTGRES_USER']} "
-    f"password={os.environ['POSTGRES_PASSWORD']}"
+    f"user={os.environ[f'{role_prefix}_USER']} "
+    f"password={os.environ[f'{role_prefix}_PASSWORD']}"
 )
 
 deadline = time.time() + 60

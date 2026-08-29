@@ -20,6 +20,9 @@ chmod 700 "$BACKUP_DIR"
 set -a
 # shellcheck disable=SC1091
 . ./.env
+# PostgreSQL管理者資格情報はWeb用.envと分離する。
+# shellcheck disable=SC1091
+. ./.env.db-admin
 set +a
 
 : "${BACKUP_ENCRYPTION_KEY_FILE:?BACKUP_ENCRYPTION_KEY_FILE を .env に設定してください}"

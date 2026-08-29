@@ -23,8 +23,8 @@ MINIMUM_ENV = {
     "DJANGO_COMMENT_IP_HASH_KEY": "test-only-ip-hash-key-9876543210-abcdefghijklmnopqrstuvwxyz",  # pragma: allowlist secret
     "DJANGO_ALLOWED_HOSTS": "cms.example.com",
     "POSTGRES_DB": "kururucms",
-    "POSTGRES_USER": "kururucms",
-    "POSTGRES_PASSWORD": "test-only-password",  # pragma: allowlist secret
+    "POSTGRES_APP_USER": "kururucms_app",
+    "POSTGRES_APP_PASSWORD": "test-only-password",  # pragma: allowlist secret
     "REDIS_PASSWORD": "test-only-redis-password-9876543210-abcdefghijklmnopqrstuvwxyz",  # pragma: allowlist secret
     "DJANGO_EMAIL_HOST": "smtp.example.com",
 }
@@ -101,9 +101,38 @@ class MissingSecretsTests(SimpleTestCase):
         self.assert_refuses_without("DJANGO_ALLOWED_HOSTS")
 
     def test_database_credentials_are_required(self):
-        for name in ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"):
+        for name in ("POSTGRES_DB", "POSTGRES_APP_USER", "POSTGRES_APP_PASSWORD"):
             with self.subTest(name=name):
                 self.assert_refuses_without(name)
+
+    def test_database_uses_only_application_credentials(self):
+        with production_settings() as settings:
+            database = settings.DATABASES["default"]
+        self.assertEqual(database["USER"], "kururucms_app")
+
+    def test_migration_job_uses_separate_owner_credentials(self):
+        with production_settings(
+            APP_START_MODE="migrate",
+            POSTGRES_MIGRATION_USER="kururucms_migrator",
+            POSTGRES_MIGRATION_PASSWORD="test-only-migration-password",
+        ) as settings:
+            database = settings.DATABASES["default"]
+        self.assertEqual(database["USER"], "kururucms_migrator")
+
+    def test_migration_credentials_are_required_for_migration_job(self):
+        for name in ("POSTGRES_MIGRATION_USER", "POSTGRES_MIGRATION_PASSWORD"):
+            credentials = {
+                "POSTGRES_MIGRATION_USER": "kururucms_migrator",
+                "POSTGRES_MIGRATION_PASSWORD": "test-only-migration-password",
+            }
+            credentials[name] = None
+            with self.subTest(name=name), self.assertRaises(RuntimeError) as caught:
+                with production_settings(
+                    APP_START_MODE="migrate",
+                    **credentials,
+                ):
+                    pass
+            self.assertIn(name, str(caught.exception))
 
     def test_email_host_is_required(self):
         self.assert_refuses_without("DJANGO_EMAIL_HOST")

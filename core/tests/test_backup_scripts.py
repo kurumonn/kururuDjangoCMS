@@ -22,6 +22,7 @@ class BackupScriptSecurityTests(SimpleTestCase):
         self.assertNotIn('DB_DUMP="$BACKUP_DIR/db-$STAMP.dump"', script)
         self.assertIn("hmac_file.py", script)
         self.assertIn(".hmac", script)
+        self.assertIn(". ./.env.db-admin", script)
 
     def test_restore_accepts_only_encrypted_dump_and_streams_decryption(self):
         script = (ROOT / "scripts" / "restore_drill.sh").read_text(
@@ -34,6 +35,7 @@ class BackupScriptSecurityTests(SimpleTestCase):
         self.assertIn("verify_hmac", script)
         self.assertIn("*.tar.gz.enc", script)
         self.assertIn("tar -xzf -", script)
+        self.assertIn(". ./.env.db-admin", script)
 
     def test_restore_drill_requires_database_and_media_pair(self):
         script = (ROOT / "scripts" / "restore_drill.sh").read_text(

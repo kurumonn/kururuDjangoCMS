@@ -35,6 +35,9 @@ done
 set -a
 # shellcheck disable=SC1091
 . ./.env
+# 復元訓練だけがDB作成権限を使うため、管理者envを明示的に読む。
+# shellcheck disable=SC1091
+. ./.env.db-admin
 set +a
 
 : "${BACKUP_ENCRYPTION_KEY_FILE:?BACKUP_ENCRYPTION_KEY_FILE を .env に設定してください}"

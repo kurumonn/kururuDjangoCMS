@@ -107,10 +107,28 @@ HTTPSへリダイレクトし、443番でTLS 1.2/1.3を終端します。
 
 ```bash
 cp .env.example .env
+cp .env.db-migration.example .env.db-migration
+cp .env.db-admin.example .env.db-admin
+chmod 0600 .env .env.db-migration .env.db-admin
+cp .env.db-migration.example .env.db-migration
+cp .env.db-admin.example .env.db-admin
+chmod 0600 .env .env.db-migration .env.db-admin
+cp .env.db-migration.example .env.db-migration
+cp .env.db-admin.example .env.db-admin
+chmod 0600 .env .env.db-migration .env.db-admin
 ```
 
 `.env` のダミー値を、**その場で生成した値**へ置き換えてください
 （`DJANGO_SECRET_KEY` などは `.env.example` のままだと起動しません）。
+PostgreSQLは管理者、migration所有者、Web/worker用DML利用者を分離します。
+管理者資格情報はDBとone-shotプロビジョニングだけ、migration資格情報は
+`migrate` jobだけへ渡され、Web/worker/maintenanceには入りません。
+PostgreSQLは管理者、migration所有者、Web/worker用DML利用者を分離します。
+管理者資格情報はDBとone-shotプロビジョニングだけ、migration資格情報は
+`migrate` jobだけへ渡され、Web/worker/maintenanceには入りません。
+PostgreSQLは管理者、migration所有者、Web/worker用DML利用者を分離します。
+管理者資格情報はDBとone-shotプロビジョニングだけ、migration資格情報は
+`migrate` jobだけへ渡され、Web/worker/maintenanceには入りません。
 
 ```bash
 docker compose up -d --build

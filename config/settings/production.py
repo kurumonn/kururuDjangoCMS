@@ -81,12 +81,17 @@ CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS") or [
 # ---------------------------------------------------------------------------
 # データベース（PostgreSQL）
 # ---------------------------------------------------------------------------
+_database_role_prefix = (
+    "POSTGRES_MIGRATION"
+    if os.environ.get("APP_START_MODE") == "migrate"
+    else "POSTGRES_APP"
+)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": require("POSTGRES_DB"),
-        "USER": require("POSTGRES_USER"),
-        "PASSWORD": require("POSTGRES_PASSWORD"),
+        "USER": require(f"{_database_role_prefix}_USER"),
+        "PASSWORD": require(f"{_database_role_prefix}_PASSWORD"),
         "HOST": os.environ.get("POSTGRES_HOST", "db"),
         "PORT": os.environ.get("POSTGRES_PORT", "5432"),
         # 接続を使い回す秒数。0 だとリクエストごとに接続し直す。

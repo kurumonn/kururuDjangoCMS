@@ -18,10 +18,9 @@ services:
   db:
     image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    env_file:
+      - .env
+      - .env.db-admin
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -35,6 +34,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # 既存DBを含め、Django用roleを管理者と分離して非特権へ収束させる。
+  # 管理者資格情報を受け取るのはdbとこのone-shotだけ。
+  db_role_provision:
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    restart: "no"
+    env_file:
+      - .env
+      - .env.db-migration
+      - .env.db-admin
+    command: ["/bin/sh", "/scripts/provision_db_role.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./docker/provision_db_role.sh:/scripts/provision_db_role.sh:ro
+    networks:
+      - backend
 
   redis:
     image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
@@ -63,11 +80,12 @@ services:
     restart: "no"
     env_file:
       - .env
+      - .env.db-migration
     environment:
       APP_START_MODE: "migrate"
     depends_on:
-      db:
-        condition: service_healthy
+      db_role_provision:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     volumes:
