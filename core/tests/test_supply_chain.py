@@ -11,6 +11,26 @@ DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 
 
 class SupplyChainPinningTests(SimpleTestCase):
+    def test_ci_uses_node24_actions_and_hash_locked_dependencies(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        ci_lock = (ROOT / "requirements-ci.lock").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+            workflow,
+        )
+        self.assertIn(
+            "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+            workflow,
+        )
+        self.assertIn("requirements-ci.lock", workflow)
+        self.assertIn("--require-hashes", workflow)
+        self.assertNotIn("requirements-ci.txt\n", workflow)
+        self.assertIn("pip==25.3", ci_lock)
+        self.assertGreater(ci_lock.count("--hash=sha256:"), 20)
+
     def test_python_build_uses_lock_and_requires_hashes(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
