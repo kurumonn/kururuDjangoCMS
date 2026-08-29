@@ -1,0 +1,17 @@
+"""CI専用。動作仕様はtest設定のままdeploy checksだけ安全値で検査する。"""
+
+from .test import *  # noqa: F401,F403
+
+DEBUG = False
+SECRET_KEY = "deploy-check-only-key-with-more-than-fifty-unique-characters-2026"  # pragma: allowlist secret
+ALLOWED_HOSTS = ["example.test"]
+SECURE_SSL_REDIRECT = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_HSTS_SECONDS = 31_536_000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+MFA_WEBAUTHN_ALLOW_INSECURE_ORIGIN = False
+TRUSTED_PROXY_COUNT = 1
+ALLAUTH_TRUSTED_PROXY_COUNT = 1

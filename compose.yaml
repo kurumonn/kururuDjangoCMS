@@ -126,6 +126,9 @@ services:
         condition: service_completed_successfully
     networks:
       - backend
+      # SMTPだけは外部サービスへ接続するため、worker専用のegressを与える。
+      # webやmaintenanceへは付与せず、公開POSTからの外向き通信を防ぐ。
+      - mail_egress
     healthcheck:
       test: ["CMD", "python", "manage.py", "check_contact_forms_health"]
       interval: 5m
@@ -205,6 +208,8 @@ networks:
   frontend:
   backend:
     internal: true
+  # 問い合わせメール配送workerだけが参加する外向きネットワーク。
+  mail_egress:
 
 volumes:
   pgdata:

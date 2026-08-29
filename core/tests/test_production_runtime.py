@@ -62,11 +62,19 @@ class ProductionRuntimeContractTests(SimpleTestCase):
         self.assertIn("process_contact_mail_outbox", worker)
         self.assertIn("check_contact_forms_health", worker)
         self.assertIn('APP_START_MODE: "worker"', worker)
+        self.assertIn("- mail_egress", worker)
         self.assertIn('profiles: ["contact-forms"]', maintenance)
         self.assertIn("run_contact_forms_maintenance", maintenance)
         self.assertIn('"86400"', maintenance)
         self.assertIn("check_contact_forms_health", maintenance)
         self.assertIn("web|worker)", entrypoint)
+
+        web = compose.split("  web:", 1)[1].split(
+            "\n  contact_forms_worker:", 1
+        )[0]
+        self.assertNotIn("- mail_egress", web)
+        self.assertNotIn("- mail_egress", maintenance)
+        self.assertIn("mail_egress:", compose.split("\nnetworks:", 1)[1])
 
     def test_nginx_follows_explicit_web_restarts(self):
         compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")

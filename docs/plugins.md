@@ -30,7 +30,12 @@ AppConfig.ready()でPluginDefinitionを一度登録します。
         description="説明",
         urlconf="my_plugin.urls",
         url_prefix="my-plugin",
+        management_url_name="dashboard",
     ))
+
+`management_url_name`は任意です。指定すると管理画面のプラグイン一覧から
+プラグイン自身の管理URLへ移動できます。外部URLではなく、
+プラグインURLconf内のURL名だけを許可します。
 
 記事ブロックを追加する場合はPluginBlockとEditorFieldを定義します。
 検証関数はブラウザから来たdataを信用せず、正規化済みdictを返します。
@@ -78,6 +83,8 @@ wheelの固定・インストールとmigrationを確認した後、専用Compos
 `contact_forms_maintenance`は起動時と24時間ごとに保存期限切れデータを削除します。
 両サービスのhealthcheckは、停止した配送、最大試行回数に達した配送、保守処理の失敗・
 長期未実行を検知します。コンテナのunhealthy状態は外部監視から通知してください。
+ComposeではDB/Redis用の`backend`を内部ネットワークに保ったまま、SMTP配送workerだけを
+`mail_egress`へ接続します。Webと保守プロセスには外向きネットワークを付与しません。
 
 手動復旧時は、最初にSMTP障害等の原因を直し、対象IDだけを再投入します。
 
