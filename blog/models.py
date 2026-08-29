@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from .blocks import blocks_to_plain_text, validate_blocks
 from .utils import unique_slugify
+from seo.validators import validate_canonical_url
 
 
 class Category(models.Model):
@@ -223,6 +224,7 @@ class Article(models.Model):
     canonical_url = models.URLField(
         "正規URL", blank=True, default="",
         help_text="他サイトへ転載した記事など、正規のURLが別にある場合に指定する。",
+        validators=[validate_canonical_url],
     )
     noindex = models.BooleanField(
         "検索エンジンから除外", default=False,
@@ -262,6 +264,10 @@ class Article(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = unique_slugify(Article, self.title, instance=self)
+
+        # JSONField のvalidator戻り値はDjangoから破棄されるため、
+        # 保存境界で明示的に正規化する。管理画面以外の保存経路も同じ境界を通る。
+        self.blocks = validate_blocks(self.blocks)
 
         # ブロックを使っている記事は、body を平文の写しとして保つ。
         # こうしておくと、検索・抜粋・RSS が JSON を解釈しなくて済む。
@@ -402,6 +408,10 @@ class ReusableBlock(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    def save(self, *args, **kwargs):
+        self.blocks = validate_blocks(self.blocks)
+        return super().save(*args, **kwargs)
 
 
 class ArticleRevision(models.Model):

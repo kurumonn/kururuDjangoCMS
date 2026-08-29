@@ -28,7 +28,7 @@ from django.views.generic import View
 
 from blog.blocks import validate_blocks
 from blog.models import Article
-from blog.permissions import can_edit
+from blog.permissions import can_change_article
 from comments.models import hash_ip
 from core.ratelimit import check_rate_limit, client_ip
 
@@ -74,9 +74,15 @@ class AutosaveView(View):
         # 画面側と同じ判定関数を使う。
         # ここで独自の条件を書くと、画面では編集できるのに
         # 自動保存だけ 403 になる、といった食い違いが起きる。
-        if not can_edit(request.user, article):
+        if not can_change_article(request.user, article):
             # 存在は知られているので 403 でよい（pk は本人が持っている前提）。
             return _error("この記事を編集する権限がありません。", 403)
+        if article.status == Article.Status.PUBLISHED:
+            return _error(
+                "公開中の記事は自動保存できません。"
+                "下書きまたはレビュー待ちへ戻してから編集してください。",
+                409,
+            )
 
         # --- 5. レート制限 -----------------------------------------------
         result = check_rate_limit(
@@ -116,7 +122,7 @@ class AutosaveView(View):
             )
             if article is None:
                 return _error("記事が見つかりません。", 404)
-            if not can_edit(request.user, article):
+            if not can_change_article(request.user, article):
                 return _error("この記事を編集する権限がありません。", 403)
             if article.status == Article.Status.PUBLISHED:
                 return _error(

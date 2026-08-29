@@ -1,7 +1,31 @@
+from django import forms
 from django.contrib import admin
+from django.core.exceptions import PermissionDenied
 
 from .models import Article, ArticleRevision, Category, ReusableBlock, Tag
 from .permissions import can_edit, can_publish, can_review
+
+
+class ArticleAdminForm(forms.ModelForm):
+    version_token = forms.IntegerField(widget=forms.HiddenInput)
+
+    class Meta:
+        model = Article
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["version_token"].initial = self.instance.version
+
+    def clean_version_token(self):
+        value = self.cleaned_data["version_token"]
+        if self.instance.pk:
+            current = Article.objects.only("version").get(pk=self.instance.pk)
+            if value != current.version:
+                raise forms.ValidationError(
+                    "別の利用者が先に更新しました。ページを再読み込みしてください。"
+                )
+        return value
 
 
 @admin.register(ReusableBlock)
@@ -30,6 +54,7 @@ class TagAdmin(admin.ModelAdmin):
 
 @admin.register(Article)
 class ArticleAdmin(admin.ModelAdmin):
+    form = ArticleAdminForm
     list_display = ("title", "author", "category", "status", "published_at")
     list_filter = ("status", "category", "tags")
     search_fields = ("title", "body")
@@ -41,7 +66,7 @@ class ArticleAdmin(admin.ModelAdmin):
     prepopulated_fields = {"slug": ("title",)}
 
     fieldsets = (
-        (None, {"fields": ("title", "slug", "body", "blocks")}),
+        (None, {"fields": ("title", "slug", "body", "blocks", "version_token")}),
         ("分類", {"fields": ("category", "tags")}),
         ("メディア", {"fields": ("featured_image",)}),
         ("公開", {"fields": ("status", "published_at", "author")}),
@@ -70,6 +95,8 @@ class ArticleAdmin(admin.ModelAdmin):
         readonly = list(super().get_readonly_fields(request, obj))
         if not can_publish(request.user):
             readonly.extend(("status", "published_at"))
+        if not request.user.is_superuser:
+            readonly.append("author")
         return tuple(readonly)
 
     def has_change_permission(self, request, obj=None):
@@ -91,6 +118,12 @@ class ArticleAdmin(admin.ModelAdmin):
         # 著者が未設定なら、操作したユーザーを著者にする。
         if not obj.author_id:
             obj.author = request.user
+        if change:
+            current = Article.objects.select_for_update().only("version").get(pk=obj.pk)
+            if form.cleaned_data["version_token"] != current.version:
+                raise PermissionDenied(
+                    "別の利用者が先に更新したため、上書きを拒否しました。"
+                )
         # 管理画面からの編集でも履歴を残す。CMS 画面だけで履歴を取ると、
         # 「管理画面から直したときだけ履歴が飛ぶ」という穴ができる。
         if change and obj.pk:

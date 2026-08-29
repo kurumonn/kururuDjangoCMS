@@ -225,10 +225,18 @@ class ArticleUpdateView(
 
     @transaction.atomic
     def form_valid(self, form):
+        current = Article.objects.select_for_update().get(pk=self.object.pk)
+        if form.cleaned_data["version"] != current.version:
+            form.add_error(
+                None,
+                "別の利用者が先に更新しました。内容を再読み込みしてから編集してください。",
+            )
+            self.object = current
+            return self.form_invalid(form)
+
         # 更新の「前」に現在の内容を版として保存する。
         # 保存後に呼ぶと、変更前の内容がどこにも残らない。
-        before = Article.objects.get(pk=self.object.pk)
-        before.snapshot(created_by=self.request.user, note="編集前の自動保存")
+        current.snapshot(created_by=self.request.user, note="編集前の自動保存")
 
         response = super().form_valid(form)
 
@@ -237,7 +245,7 @@ class ArticleUpdateView(
             actor=self.request.user,
             target=self.object,
             request=self.request,
-            from_status=before.status,
+            from_status=current.status,
             to_status=self.object.status,
         )
         messages.success(self.request, "記事を更新しました。")

@@ -8,6 +8,7 @@ Form は「入力が正しいかを検証する」役割に分ける。
 from django import forms
 from django.utils import timezone
 
+from .blocks import validate_blocks
 from .models import Article
 
 
@@ -22,6 +23,8 @@ class ArticleForm(forms.ModelForm):
     このフォームは choices を実際に差し替えるため、
     権限のない値を送っても検証で弾かれる。
     """
+
+    version = forms.IntegerField(required=False, widget=forms.HiddenInput)
 
     class Meta:
         model = Article
@@ -56,6 +59,8 @@ class ArticleForm(forms.ModelForm):
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.user = user
+        if self.instance.pk:
+            self.fields["version"].initial = self.instance.version
 
         # datetime-local 入力は "YYYY-MM-DDTHH:MM" 形式しか受け付けない。
         self.fields["published_at"].input_formats = [
@@ -94,6 +99,15 @@ class ArticleForm(forms.ModelForm):
         if status == Article.Status.PUBLISHED and not self.can_publish:
             raise forms.ValidationError("記事を公開する権限がありません。")
         return status
+
+    def clean_blocks(self):
+        return validate_blocks(self.cleaned_data.get("blocks"))
+
+    def clean_version(self):
+        value = self.cleaned_data.get("version")
+        if self.instance.pk and value is None:
+            raise forms.ValidationError("編集対象の版番号がありません。再読み込みしてください。")
+        return value
 
     def clean(self):
         cleaned = super().clean()

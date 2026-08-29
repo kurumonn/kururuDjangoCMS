@@ -234,7 +234,11 @@ class ArticleUpdateDeleteViewTests(TestCase):
         self.category = create_category()
         self.owner = create_author(username="owner")
         self.article = create_article(
-            title="所有者の記事", author=self.owner, category=self.category
+            title="所有者の記事",
+            author=self.owner,
+            category=self.category,
+            status=Article.Status.DRAFT,
+            published_at=None,
         )
         self.update_url = reverse("blog:article_update", args=[self.article.slug])
         self.delete_url = reverse("blog:article_delete", args=[self.article.slug])
@@ -243,6 +247,21 @@ class ArticleUpdateDeleteViewTests(TestCase):
         login_staff(self.client, self.owner)
         response = self.client.get(self.update_url)
         self.assertEqual(response.status_code, 200)
+
+    def test_owner_without_publish_permission_cannot_edit_published_article(self):
+        published = create_article(
+            title="承認済み",
+            author=self.owner,
+            category=self.category,
+        )
+        login_staff(self.client, self.owner)
+
+        response = self.client.get(
+            reverse("blog:article_update", args=[published.slug])
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(published.is_visible_to_public)
 
     def test_other_author_cannot_edit(self):
         """権限は持っているが、他人の記事なので編集できない。"""

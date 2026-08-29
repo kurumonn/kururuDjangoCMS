@@ -427,6 +427,7 @@ class RevisionTests(TestCase):
                 "category": self.category.pk,
                 "status": Article.Status.DRAFT,
                 "published_at": "",
+                "version": self.article.version,
             },
         )
 
@@ -441,6 +442,31 @@ class RevisionTests(TestCase):
 
         self.article.refresh_from_db()
         self.assertEqual(self.article.title, "2番目のタイトル")
+
+    def test_stale_edit_is_rejected_without_overwriting_newer_content(self):
+        login_staff(self.client, self.author)
+        stale_version = self.article.version
+        Article.objects.filter(pk=self.article.pk).update(
+            title="先に保存された内容",
+            version=stale_version + 1,
+        )
+
+        response = self.client.post(
+            self.update_url,
+            {
+                "title": "古い画面からの上書き",
+                "body": "古い本文",
+                "category": self.category.pk,
+                "status": Article.Status.DRAFT,
+                "published_at": "",
+                "version": stale_version,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.article.refresh_from_db()
+        self.assertEqual(self.article.title, "先に保存された内容")
+        self.assertContains(response, "別の利用者が先に更新しました")
 
     def test_restore_brings_back_old_content(self):
         login_staff(self.client, self.author)
@@ -534,7 +560,7 @@ class RevisionTests(TestCase):
             )
         )
 
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 403)
         article.refresh_from_db()
         self.assertEqual(article.body, "現在の公開本文")
         self.assertEqual(article.status, Article.Status.PUBLISHED)
@@ -594,7 +620,11 @@ class AuditLogTests(TestCase):
 
     def test_delete_is_recorded_with_title(self):
         article = create_article(
-            title="消える記事", author=self.author, category=self.category
+            title="消える記事",
+            author=self.author,
+            category=self.category,
+            status=Article.Status.DRAFT,
+            published_at=None,
         )
         login_staff(self.client, self.author)
         self.client.post(reverse("blog:article_delete", args=[article.slug]))

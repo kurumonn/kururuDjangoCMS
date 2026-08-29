@@ -24,7 +24,9 @@
     {% endif %}
 
     {% for field in form %}
-      {% if field.name == "blocks" %}
+      {% if field.name == "version" %}
+        {{ field }}
+      {% elif field.name == "blocks" %}
         {# ブロックは専用エディターで編集する。生の JSON は隠す。 #}
         <div class="field">
           <label for="{{ field.id_for_label }}">本文（ブロック）</label>
