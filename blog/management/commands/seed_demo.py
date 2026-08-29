@@ -2,9 +2,11 @@
 
     python manage.py seed_demo
 
-本番では絶対に実行しない。既定のパスワードを持つユーザーを作るため、
+本番では絶対に実行しない。デモ用ユーザーを作るため、
 DEBUG=False の環境では実行を拒否する。
 """
+
+import secrets
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -16,8 +18,6 @@ from blog.models import Article, Category, Tag
 from pages.models import Page
 
 User = get_user_model()
-
-DEMO_PASSWORD = "demo-pass-phrase-1234"
 
 
 class Command(BaseCommand):
@@ -33,16 +33,17 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if not settings.DEBUG and not options["force"]:
             raise CommandError(
-                "DEBUG=False では実行できません。デモ用の既定パスワードを持つ"
-                "ユーザーが作られるためです。"
+                "DEBUG=False では実行できません。デモ用ユーザーが作られるためです。"
             )
 
         author, created = User.objects.get_or_create(
             username="demo_author",
             defaults={"email": "demo_author@example.com", "display_name": "デモ投稿者"},
         )
+        demo_password = None
         if created:
-            author.set_password(DEMO_PASSWORD)
+            demo_password = secrets.token_urlsafe(18)
+            author.set_password(demo_password)
             author.save()
         for codename in ("add_article", "change_article", "delete_article"):
             author.user_permissions.add(
@@ -106,9 +107,14 @@ class Command(BaseCommand):
             },
         )
 
+        credentials = (
+            f"投稿者: demo_author / 今回生成したパスワード: {demo_password}"
+            if demo_password
+            else "投稿者 demo_author は既存のため、パスワードは変更していません。"
+        )
         self.stdout.write(
             self.style.SUCCESS(
                 f"デモデータを投入しました（記事 {Article.objects.count()} 件）。\n"
-                f"投稿者: demo_author / パスワード: {DEMO_PASSWORD}"
+                f"{credentials}"
             )
         )

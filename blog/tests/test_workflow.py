@@ -24,7 +24,7 @@ from .factories import (
     verify_email,
 )
 
-PASSWORD = "test-pass-phrase-1234"
+PASSWORD = "test-pass-phrase-1234"  # pragma: allowlist secret
 
 
 class PublishPermissionTests(TestCase):

@@ -14,7 +14,7 @@ User = get_user_model()
 def create_user(username="author1", **kwargs):
     defaults = {
         "email": f"{username}@example.com",
-        "password": "test-pass-phrase-1234",
+        "password": "test-pass-phrase-1234",  # pragma: allowlist secret
     }
     defaults.update(kwargs)
     password = defaults.pop("password")
@@ -97,7 +97,7 @@ def add_totp(user):
     return totp_auth.TOTP.activate(user, secret).instance
 
 
-def login_staff(client, user, password="test-pass-phrase-1234"):
+def login_staff(client, user, password="test-pass-phrase-1234"):  # pragma: allowlist secret
     """スタッフとして、本番と同じ経路でログインする。
 
     `client.login()` を使ってはいけない。あれは

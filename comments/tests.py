@@ -14,7 +14,7 @@ from blog.tests.factories import create_article, create_category, create_user
 from .forms import MIN_FILL_SECONDS
 from .models import Comment, hash_ip
 
-PASSWORD = "test-pass-phrase-1234"
+PASSWORD = "test-pass-phrase-1234"  # pragma: allowlist secret
 
 
 def payload(**overrides):
@@ -277,7 +277,7 @@ class IpHashTests(TestCase):
         """
         before = hash_ip("198.51.100.7")
 
-        with self.settings(SECRET_KEY="totally-different-secret-key"):
+        with self.settings(SECRET_KEY="totally-different-secret-key"):  # pragma: allowlist secret
             self.assertEqual(hash_ip("198.51.100.7"), before)
 
     def test_changing_the_dedicated_key_changes_the_hash(self):

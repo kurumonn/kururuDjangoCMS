@@ -22,7 +22,7 @@ from .factories import (
     login_staff,
 )
 
-PASSWORD = "test-pass-phrase-1234"
+PASSWORD = "test-pass-phrase-1234"  # pragma: allowlist secret
 
 
 def listed_titles(response) -> set[str]:

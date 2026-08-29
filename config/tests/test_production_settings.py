@@ -19,13 +19,13 @@ MODULE = "config.settings.production"
 
 # 本番設定を import できる最小の環境変数。
 MINIMUM_ENV = {
-    "DJANGO_SECRET_KEY": "test-only-not-a-real-key-0123456789-abcdefghijklmnopqrstuvwxyz",
-    "DJANGO_COMMENT_IP_HASH_KEY": "test-only-ip-hash-key-9876543210-abcdefghijklmnopqrstuvwxyz",
+    "DJANGO_SECRET_KEY": "test-only-not-a-real-key-0123456789-abcdefghijklmnopqrstuvwxyz",  # pragma: allowlist secret
+    "DJANGO_COMMENT_IP_HASH_KEY": "test-only-ip-hash-key-9876543210-abcdefghijklmnopqrstuvwxyz",  # pragma: allowlist secret
     "DJANGO_ALLOWED_HOSTS": "cms.example.com",
     "POSTGRES_DB": "kururucms",
     "POSTGRES_USER": "kururucms",
-    "POSTGRES_PASSWORD": "test-only-password",
-    "REDIS_PASSWORD": "test-only-redis-password-9876543210-abcdefghijklmnopqrstuvwxyz",
+    "POSTGRES_PASSWORD": "test-only-password",  # pragma: allowlist secret
+    "REDIS_PASSWORD": "test-only-redis-password-9876543210-abcdefghijklmnopqrstuvwxyz",  # pragma: allowlist secret
     "DJANGO_EMAIL_HOST": "smtp.example.com",
 }
 
@@ -82,7 +82,7 @@ class MissingSecretsTests(SimpleTestCase):
 
     def test_same_secret_and_ip_hash_key_is_rejected(self):
         """用途の違う鍵を同じ値にした本番設定は起動させない。"""
-        shared = "test-only-shared-secret-that-is-long-enough-0123456789abcdef"
+        shared = "test-only-shared-secret-that-is-long-enough-0123456789abcdef"  # pragma: allowlist secret
         with self.assertRaises(RuntimeError) as caught:
             with production_settings(
                 DJANGO_SECRET_KEY=shared,
@@ -94,7 +94,7 @@ class MissingSecretsTests(SimpleTestCase):
     def test_short_application_secrets_are_rejected(self):
         for name in ("DJANGO_SECRET_KEY", "DJANGO_COMMENT_IP_HASH_KEY"):
             with self.subTest(name=name), self.assertRaises(RuntimeError):
-                with production_settings(**{name: "too-short"}):
+                with production_settings(**{name: "too-short"}):  # pragma: allowlist secret
                     pass
 
     def test_allowed_hosts_is_required(self):

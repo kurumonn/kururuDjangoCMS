@@ -26,7 +26,7 @@ from accounts.testing import current_totp_code, login_through_allauth
 
 User = get_user_model()
 
-PASSWORD = "test-pass-phrase-1234"
+PASSWORD = "test-pass-phrase-1234"  # pragma: allowlist secret
 
 
 def make_user(username: str, *, is_staff: bool = False) -> User:

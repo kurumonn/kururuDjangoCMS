@@ -22,7 +22,7 @@ from allauth.account.models import EmailAddress
 
 User = get_user_model()
 
-PASSWORD = "test-pass-phrase-1234"
+PASSWORD = "test-pass-phrase-1234"  # pragma: allowlist secret
 
 
 def extract_code(message) -> str:
@@ -98,8 +98,8 @@ class SignupTests(TestCase):
             self.url,
             {
                 "email": "newbie@example.com",
-                "password1": "a-long-enough-passphrase-1",
-                "password2": "a-long-enough-passphrase-1",
+                "password1": "a-long-enough-passphrase-1",  # pragma: allowlist secret
+                "password2": "a-long-enough-passphrase-1",  # pragma: allowlist secret
             },
         )
         self.assertEqual(response.status_code, 302)
@@ -124,8 +124,8 @@ class SignupTests(TestCase):
             self.url,
             {
                 "email": "existing@example.com",
-                "password1": "a-long-enough-passphrase-1",
-                "password2": "a-long-enough-passphrase-1",
+                "password1": "a-long-enough-passphrase-1",  # pragma: allowlist secret
+                "password2": "a-long-enough-passphrase-1",  # pragma: allowlist secret
             },
         )
         content = response.content.decode()
@@ -137,7 +137,11 @@ class SignupTests(TestCase):
     def test_short_password_is_rejected(self):
         response = self.client.post(
             self.url,
-            {"email": "short@example.com", "password1": "abc12345", "password2": "abc12345"},
+            {
+                "email": "short@example.com",
+                "password1": "abc12345",  # pragma: allowlist secret
+                "password2": "abc12345",  # pragma: allowlist secret
+            },
         )
         self.assertEqual(response.status_code, 200)  # フォーム再表示
         self.assertFalse(User.objects.filter(email="short@example.com").exists())
