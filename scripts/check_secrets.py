@@ -24,6 +24,11 @@ def main() -> int:
         return completed.returncode
     findings = json.loads(completed.stdout).get("results", {})
     if findings:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            summary = ", ".join(
+                f"{path}={len(candidates)}" for path, candidates in sorted(findings.items())
+            )
+            print(f"::error::Potential secret candidates by file: {summary}")
         for path, candidates in sorted(findings.items()):
             message = f"Potential secrets found: {len(candidates)} candidate(s)"
             print(f"Potential secrets found in {path}: {len(candidates)}")
