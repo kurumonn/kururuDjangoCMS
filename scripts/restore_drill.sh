@@ -1,44 +1,102 @@
 #!/usr/bin/env bash
-# 復元の訓練。**本番のデータベースには一切触らない。**
+# 暗号化バックアップを、使い捨ての別DBへ復元する訓練。
+# 本番のデータベースには一切書き込まない。
 #
-#   ./scripts/restore_drill.sh backups/db-20260805-090000.dump
-#
-# バックアップを、使い捨ての別データベースへ復元して中身を数える。
-#
-# なぜ訓練が要るか:
-#   バックアップは「取れているか」ではなく「戻せるか」でしか価値が測れない。
-#   そして戻せないと分かるのは、たいてい本当に必要になったときである。
-#   月に一度これを流しておけば、その日に初めて気づくことがなくなる。
+#   ./scripts/restore_drill.sh <暗号化DB> <暗号化media>
 set -euo pipefail
+umask 077
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-DUMP="${1:?使い方: ./scripts/restore_drill.sh <ダンプファイル>}"
+DUMP="${1:?使い方: ./scripts/restore_drill.sh <暗号化DB> <暗号化media>}"
+MEDIA="${2:?使い方: ./scripts/restore_drill.sh <暗号化DB> <暗号化media>}"
 DRILL_DB="kururucms_restore_drill"
 
-if [ ! -s "$DUMP" ]; then
-    echo "[drill] ダンプが見つからないか空です: $DUMP" >&2
-    exit 1
-fi
+case "$DUMP" in
+    *.dump.enc) ;;
+    *)
+        echo "[drill] 暗号化された *.dump.enc だけを受け付けます" >&2
+        exit 1
+        ;;
+esac
+case "$MEDIA" in
+    *.tar.gz.enc) ;;
+    *)
+        echo "[drill] 暗号化された *.tar.gz.enc だけを受け付けます" >&2
+        exit 1
+        ;;
+esac
+for artifact in "$DUMP" "$DUMP.hmac" "$MEDIA" "$MEDIA.hmac"; do
+    if [ ! -s "$artifact" ]; then
+        echo "[drill] バックアップが見つからないか空です: $artifact" >&2
+        exit 1
+    fi
+done
 
 set -a
 # shellcheck disable=SC1091
 . ./.env
 set +a
 
-# 本番の DB 名と同じ名前を使っていないことを確かめる。
-# ここを間違えると訓練が事故になる。
+: "${BACKUP_ENCRYPTION_KEY_FILE:?BACKUP_ENCRYPTION_KEY_FILE を .env に設定してください}"
+if [ ! -f "$BACKUP_ENCRYPTION_KEY_FILE" ]; then
+    echo "[drill] 暗号化鍵ファイルが見つかりません" >&2
+    exit 1
+fi
+KEY_MODE="$(stat -c '%a' "$BACKUP_ENCRYPTION_KEY_FILE")"
+if [ "$KEY_MODE" != "400" ] && [ "$KEY_MODE" != "600" ]; then
+    echo "[drill] 暗号化鍵ファイルの権限は 0400 または 0600 にしてください" >&2
+    exit 1
+fi
+command -v openssl > /dev/null || {
+    echo "[drill] openssl が必要です" >&2
+    exit 1
+}
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+command -v "$PYTHON_BIN" > /dev/null || {
+    echo "[drill] HMAC検証にPython 3が必要です" >&2
+    exit 1
+}
+
+hmac_file() {
+    "$PYTHON_BIN" "$SCRIPT_DIR/hmac_file.py" \
+        "$BACKUP_ENCRYPTION_KEY_FILE" "$1"
+}
+
+verify_hmac() {
+    actual="$(hmac_file "$1")"
+    expected="$(tr -d '\r\n' < "$2")"
+    if [ "${#expected}" -ne 64 ] || [ "$actual" != "$expected" ]; then
+        echo "[drill] 改ざんまたは鍵の不一致を検出しました: $1" >&2
+        exit 1
+    fi
+}
+
+decrypt() {
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+        -pass "file:$BACKUP_ENCRYPTION_KEY_FILE"
+}
+
+# 復号・DB書き込みより先に暗号文全体を認証する。
+verify_hmac "$DUMP" "$DUMP.hmac"
+verify_hmac "$MEDIA" "$MEDIA.hmac"
+
 if [ "$DRILL_DB" = "$POSTGRES_DB" ]; then
     echo "[drill] 中止: 訓練用の名前が本番と同じです" >&2
     exit 1
 fi
 
+MEDIA_DRILL_DIR="$(mktemp -d)"
+DB_CREATED=0
+
 cleanup() {
-    echo "[drill] 訓練用データベースを片付けます..."
-    docker compose exec -T db \
-        psql -U "$POSTGRES_USER" -d postgres \
-        -c "DROP DATABASE IF EXISTS $DRILL_DB;" > /dev/null
+    rm -rf -- "$MEDIA_DRILL_DIR"
+    if [ "$DB_CREATED" -eq 1 ]; then
+        echo "[drill] 訓練用データベースを片付けます..."
+        docker compose exec -T db \
+            psql -U "$POSTGRES_USER" -d postgres \
+            -c "DROP DATABASE IF EXISTS $DRILL_DB;" > /dev/null
+    fi
 }
-# 途中で失敗しても必ず片付ける。
-# 残しておくと、次回「既にある」で失敗し、訓練そのものをやらなくなる。
 trap cleanup EXIT
 
 echo "[drill] 訓練用データベースを作ります: $DRILL_DB"
@@ -48,11 +106,12 @@ docker compose exec -T db \
 docker compose exec -T db \
     psql -U "$POSTGRES_USER" -d postgres \
     -c "CREATE DATABASE $DRILL_DB;" > /dev/null
+DB_CREATED=1
 
-echo "[drill] 復元します..."
-# ファイル名は渡さず、標準入力から読ませる（backup.sh と同じ理由）。
-docker compose exec -T db \
-    sh -c "pg_restore -U '$POSTGRES_USER' -d '$DRILL_DB' --no-owner" < "$DUMP"
+echo "[drill] 平文を保存せず、復号ストリームを復元します..."
+decrypt < "$DUMP" \
+    | docker compose exec -T db \
+        sh -c "pg_restore -U '$POSTGRES_USER' -d '$DRILL_DB' --no-owner"
 
 echo "[drill] 復元した中身を数えます..."
 docker compose exec -T db \
@@ -63,16 +122,13 @@ docker compose exec -T db \
             || ' media='    || (SELECT count(*) FROM media_library_mediaasset);
     "
 
-echo "[drill] 現在の本番と比べます..."
-docker compose exec -T db \
-    psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tA -c "
-        SELECT 'articles=' || (SELECT count(*) FROM blog_article)
-            || ' users='    || (SELECT count(*) FROM accounts_user)
-            || ' comments=' || (SELECT count(*) FROM comments_comment)
-            || ' media='    || (SELECT count(*) FROM media_library_mediaasset);
-    "
+echo "[drill] mediaを使い捨てディレクトリへ復元します..."
+decrypt < "$MEDIA" | tar -xzf - -C "$MEDIA_DRILL_DIR"
+if [ ! -d "$MEDIA_DRILL_DIR/media" ]; then
+    echo "[drill] mediaディレクトリを復元できませんでした" >&2
+    exit 1
+fi
+find "$MEDIA_DRILL_DIR/media" -type f -print0 | xargs -0 -r sha256sum > /dev/null
 
 echo
-echo "[drill] 完了。上の2行を見比べてください。"
-echo "        バックアップ以降に増えたぶんだけ差が出るのが正常です。"
-echo "        差が大きすぎる／復元側が 0 なら、バックアップが壊れています。"
+echo "[drill] 完了。DBとmediaを復元し、暗号文のHMACも検証しました。"

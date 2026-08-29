@@ -1,5 +1,8 @@
 """運用のための画面（人向けではないもの）。"""
 
+import secrets
+
+from django.core.cache import cache
 from django.db import connection
 from django.http import JsonResponse
 from django.views.decorators.cache import never_cache
@@ -31,6 +34,22 @@ def healthz(request):
         # 例外の中身は返さない。
         # 接続文字列やホスト名が漏れるおそれがあるため、外向きには状態だけ返す。
         # 詳細はログに出る（production.py の LOGGING）。
-        return JsonResponse({"status": "error", "database": "unavailable"}, status=503)
+        return JsonResponse({"status": "error"}, status=503)
+
+    # セッションと認証レート制限は共有キャッシュに依存する。
+    # DB だけ正常でも Redis が落ちていれば、安全にログインを受け付けられない。
+    cache_key = f"healthz:{secrets.token_hex(12)}"
+    cache_value = secrets.token_hex(12)
+    try:
+        cache.set(cache_key, cache_value, timeout=5)
+        if cache.get(cache_key) != cache_value:
+            raise RuntimeError("cache round trip failed")
+    except Exception:
+        return JsonResponse({"status": "error"}, status=503)
+    finally:
+        try:
+            cache.delete(cache_key)
+        except Exception:
+            pass
 
     return JsonResponse({"status": "ok"})

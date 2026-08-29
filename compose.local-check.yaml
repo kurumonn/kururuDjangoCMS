@@ -4,22 +4,11 @@
 #
 # ★本番では使わない。★
 #
-# なぜ必要か:
-#   production.py は SECURE_SSL_REDIRECT=True なので、
-#   HTTP で来たリクエストを HTTPS へリダイレクトする。
-#   手元には証明書が無いので、そのままだと画面まで辿り着けない。
-#
-# ここで「TLS を終端したプロキシがいる」状態だけを真似る。
-# 設定ファイルを差し替えるのは nginx 側だけで、
-# **Django の本番設定には一切手を入れない**のが要点。
-#
-# もし production.py に「ローカル検証のときだけ HTTPS 強制を切る」
-# 環境変数を足したら、その変数は本番でも読めてしまう。
-# 検証のための逃げ道を本番設定に残さない。
+# production.pyを緩めず、自己署名証明書で本番と同じHTTPS経路を確認する。
+# 証明書と秘密鍵のパスは .env の TLS_*_FILE で指定する。
 
 services:
   nginx:
-    volumes:
-      - ./docker/nginx/local-check.conf:/etc/nginx/conf.d/default.conf:ro
-      - staticfiles:/var/www/static:ro
-      - media:/var/www/media:ro
+    # ローカルでも本番と同じTLS経路を通す。自己署名証明書は .env で指定する。
+    environment:
+      NGINX_SERVER_NAME: localhost

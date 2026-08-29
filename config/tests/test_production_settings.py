@@ -19,12 +19,13 @@ MODULE = "config.settings.production"
 
 # 本番設定を import できる最小の環境変数。
 MINIMUM_ENV = {
-    "DJANGO_SECRET_KEY": "test-only-not-a-real-key-0123456789",
-    "DJANGO_COMMENT_IP_HASH_KEY": "test-only-ip-hash-key-9876543210",
+    "DJANGO_SECRET_KEY": "test-only-not-a-real-key-0123456789-abcdefghijklmnopqrstuvwxyz",
+    "DJANGO_COMMENT_IP_HASH_KEY": "test-only-ip-hash-key-9876543210-abcdefghijklmnopqrstuvwxyz",
     "DJANGO_ALLOWED_HOSTS": "cms.example.com",
     "POSTGRES_DB": "kururucms",
     "POSTGRES_USER": "kururucms",
     "POSTGRES_PASSWORD": "test-only-password",
+    "REDIS_PASSWORD": "test-only-redis-password-9876543210-abcdefghijklmnopqrstuvwxyz",
     "DJANGO_EMAIL_HOST": "smtp.example.com",
 }
 
@@ -79,13 +80,22 @@ class MissingSecretsTests(SimpleTestCase):
         """
         self.assert_refuses_without("DJANGO_COMMENT_IP_HASH_KEY")
 
-    def test_ip_hash_key_differs_from_secret_key(self):
-        """同じ値を入れていないこと自体は設定側では強制しないが、
-        分ける意図が設定に現れていることを固定しておく。"""
-        with production_settings() as settings_module:
-            self.assertNotEqual(
-                settings_module.COMMENT_IP_HASH_KEY, settings_module.SECRET_KEY
-            )
+    def test_same_secret_and_ip_hash_key_is_rejected(self):
+        """用途の違う鍵を同じ値にした本番設定は起動させない。"""
+        shared = "test-only-shared-secret-that-is-long-enough-0123456789abcdef"
+        with self.assertRaises(RuntimeError) as caught:
+            with production_settings(
+                DJANGO_SECRET_KEY=shared,
+                DJANGO_COMMENT_IP_HASH_KEY=shared,
+            ):
+                pass
+        self.assertIn("DJANGO_COMMENT_IP_HASH_KEY", str(caught.exception))
+
+    def test_short_application_secrets_are_rejected(self):
+        for name in ("DJANGO_SECRET_KEY", "DJANGO_COMMENT_IP_HASH_KEY"):
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                with production_settings(**{name: "too-short"}):
+                    pass
 
     def test_allowed_hosts_is_required(self):
         self.assert_refuses_without("DJANGO_ALLOWED_HOSTS")
@@ -97,6 +107,9 @@ class MissingSecretsTests(SimpleTestCase):
 
     def test_email_host_is_required(self):
         self.assert_refuses_without("DJANGO_EMAIL_HOST")
+
+    def test_redis_password_is_required(self):
+        self.assert_refuses_without("REDIS_PASSWORD")
 
     def test_blank_value_counts_as_missing(self):
         """空文字は「設定した」ことにしない。
@@ -206,6 +219,25 @@ class ProductionHardeningTests(SimpleTestCase):
         """
         with production_settings() as settings:
             self.assertEqual(settings.TRUSTED_PROXY_COUNT, 1)
+            self.assertEqual(settings.ALLAUTH_TRUSTED_PROXY_COUNT, 1)
+
+    def test_wildcard_allowed_host_is_rejected(self):
+        with self.assertRaises(RuntimeError) as caught:
+            with production_settings(DJANGO_ALLOWED_HOSTS="*"):
+                pass
+        self.assertIn("DJANGO_ALLOWED_HOSTS", str(caught.exception))
+
+    def test_negative_proxy_count_is_rejected(self):
+        with self.assertRaises(RuntimeError) as caught:
+            with production_settings(DJANGO_TRUSTED_PROXY_COUNT="-1"):
+                pass
+        self.assertIn("DJANGO_TRUSTED_PROXY_COUNT", str(caught.exception))
+
+    def test_proxy_count_must_match_the_single_nginx_hop(self):
+        for count in ("0", "2"):
+            with self.subTest(count=count), self.assertRaises(RuntimeError):
+                with production_settings(DJANGO_TRUSTED_PROXY_COUNT=count):
+                    pass
 
 
 class SettingsPackageTests(SimpleTestCase):

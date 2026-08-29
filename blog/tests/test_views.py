@@ -148,16 +148,16 @@ class ArticleDetailViewTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_author_can_preview_own_draft(self):
-        self.client.login(username="detail-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         response = self.client.get(self.draft.get_absolute_url())
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context["is_preview"])
 
-    def test_staff_can_preview_any_draft(self):
+    def test_unrelated_staff_cannot_preview_draft(self):
         staff = create_staff(username="detail-staff")
         login_staff(self.client, staff)
         response = self.client.get(self.draft.get_absolute_url())
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 404)
 
     def test_body_is_escaped(self):
         """本文の HTML はエスケープされ、スクリプトとして実行されない。"""
@@ -203,8 +203,8 @@ class ArticleCreateViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_author_can_create(self):
-        create_author(username="creator")
-        self.client.login(username="creator", password=PASSWORD)
+        creator = create_author(username="creator")
+        login_staff(self.client, creator)
         response = self.client.post(self.url, self._payload())
         self.assertEqual(response.status_code, 302)
         self.assertTrue(Article.objects.filter(title="新しい記事").exists())
@@ -212,16 +212,16 @@ class ArticleCreateViewTests(TestCase):
     def test_author_cannot_be_spoofed(self):
         """フォームに他人の ID を混ぜても、著者はログイン中のユーザーになる。"""
         victim = create_user(username="victim")
-        create_author(username="attacker")
-        self.client.login(username="attacker", password=PASSWORD)
+        attacker = create_author(username="attacker")
+        login_staff(self.client, attacker)
         self.client.post(self.url, self._payload(author=victim.pk))
 
         article = Article.objects.get(title="新しい記事")
         self.assertEqual(article.author.username, "attacker")
 
     def test_published_without_date_gets_current_time(self):
-        create_editor(username="dateless-editor")
-        self.client.login(username="dateless-editor", password=PASSWORD)
+        editor = create_editor(username="dateless-editor")
+        login_staff(self.client, editor)
         self.client.post(self.url, self._payload(status=Article.Status.PUBLISHED))
 
         article = Article.objects.get(title="新しい記事")
@@ -240,39 +240,39 @@ class ArticleUpdateDeleteViewTests(TestCase):
         self.delete_url = reverse("blog:article_delete", args=[self.article.slug])
 
     def test_owner_can_edit(self):
-        self.client.login(username="owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         response = self.client.get(self.update_url)
         self.assertEqual(response.status_code, 200)
 
     def test_other_author_cannot_edit(self):
         """権限は持っているが、他人の記事なので編集できない。"""
-        create_author(username="other")
-        self.client.login(username="other", password=PASSWORD)
+        other = create_author(username="other")
+        login_staff(self.client, other)
         response = self.client.get(self.update_url)
         self.assertEqual(response.status_code, 403)
 
-    def test_staff_can_edit_others_article(self):
+    def test_unrelated_staff_cannot_edit_others_article(self):
         staff = create_staff(username="staffer")
         login_staff(self.client, staff)
         response = self.client.get(self.update_url)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 403)
 
     def test_other_author_cannot_delete(self):
-        create_author(username="other-del")
-        self.client.login(username="other-del", password=PASSWORD)
+        other = create_author(username="other-del")
+        login_staff(self.client, other)
         response = self.client.post(self.delete_url)
         self.assertEqual(response.status_code, 403)
         self.assertTrue(Article.objects.filter(pk=self.article.pk).exists())
 
     def test_get_does_not_delete(self):
         """GET は確認画面を出すだけで、削除は実行しない。"""
-        self.client.login(username="owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         response = self.client.get(self.delete_url)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(Article.objects.filter(pk=self.article.pk).exists())
 
     def test_post_deletes(self):
-        self.client.login(username="owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         response = self.client.post(self.delete_url)
         self.assertEqual(response.status_code, 302)
         self.assertFalse(Article.objects.filter(pk=self.article.pk).exists())

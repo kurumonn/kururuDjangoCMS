@@ -126,6 +126,18 @@ def check_proxy_configuration(app_configs, **kwargs):
         )
 
     proxy_count = getattr(settings, "TRUSTED_PROXY_COUNT", 0)
+    allauth_proxy_count = getattr(settings, "ALLAUTH_TRUSTED_PROXY_COUNT", 0)
+    if allauth_proxy_count != proxy_count:
+        issues.append(
+            Error(
+                "TRUSTED_PROXY_COUNT と ALLAUTH_TRUSTED_PROXY_COUNT が一致しません。",
+                hint=(
+                    "コメント/IP記録と認証レート制限が同じクライアントIPを使うよう、"
+                    "実際の信頼できるプロキシ段数を両方へ設定してください。"
+                ),
+                id="core.E003",
+            )
+        )
     if proxy_header and proxy_count == 0:
         issues.append(
             Warning(

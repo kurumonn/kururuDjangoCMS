@@ -10,6 +10,7 @@ wsgi.py / asgi.py はこれを既定にしている。
 """
 
 import os
+from urllib.parse import quote
 
 from .base import *  # noqa: F401,F403
 from .base import BASE_DIR, env_bool, env_list
@@ -34,7 +35,16 @@ def require(name: str) -> str:
     return value
 
 
-SECRET_KEY = require("DJANGO_SECRET_KEY")
+def require_secret(name: str, minimum_length: int) -> str:
+    value = require(name)
+    if len(value) < minimum_length:
+        raise RuntimeError(
+            f"環境変数 {name} は {minimum_length} 文字以上のランダム値にしてください。"
+        )
+    return value
+
+
+SECRET_KEY = require_secret("DJANGO_SECRET_KEY", 50)
 
 # コメントの IP ハッシュ専用の鍵。SECRET_KEY とは分ける。
 #
@@ -44,7 +54,11 @@ SECRET_KEY = require("DJANGO_SECRET_KEY")
 #
 # 本番では必須にしている。未設定でも SECRET_KEY で動いてしまうと、
 # 「分けたつもりで分かれていない」状態に気づけないため。
-COMMENT_IP_HASH_KEY = require("DJANGO_COMMENT_IP_HASH_KEY")
+COMMENT_IP_HASH_KEY = require_secret("DJANGO_COMMENT_IP_HASH_KEY", 32)
+if COMMENT_IP_HASH_KEY == SECRET_KEY:
+    raise RuntimeError(
+        "DJANGO_COMMENT_IP_HASH_KEY は DJANGO_SECRET_KEY と別の値にしてください。"
+    )
 
 # ALLOWED_HOSTS を空のままにすると、DEBUG=False では全リクエストが 400 になる。
 # 「本番に上げたら真っ白」の原因で最も多いもののひとつ。
@@ -53,6 +67,10 @@ if not ALLOWED_HOSTS:
     raise RuntimeError(
         "DJANGO_ALLOWED_HOSTS が未設定です。"
         " 例: DJANGO_ALLOWED_HOSTS=cms.example.com,www.example.com"
+    )
+if "*" in ALLOWED_HOSTS:
+    raise RuntimeError(
+        "DJANGO_ALLOWED_HOSTS にワイルドカード '*' は指定できません。"
     )
 
 # CSRF の検証はスキーム込みで行う。ホスト名だけでは足りない。
@@ -88,7 +106,13 @@ DATABASES = {
 # ローカルメモリだとワーカーごとに別の数え方になるので、
 # 「5回まで」がワーカー4本で実質20回になる。
 # ログインの総当たり制限が4倍緩むということなので、これは性能の話ではない。
-REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+REDIS_PASSWORD = require_secret("REDIS_PASSWORD", 32)
+REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+REDIS_DB = int(os.environ.get("REDIS_DB", "0"))
+REDIS_URL = (
+    f"redis://:{quote(REDIS_PASSWORD, safe='')}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+)
 
 CACHES = {
     "default": {
@@ -150,7 +174,15 @@ if not SECURE_HSTS_PRELOAD:
     SILENCED_SYSTEM_CHECKS.append("security.W021")
 
 # Nginx の背後にいるので、X-Forwarded-For は1段ぶんだけ信用する。
-TRUSTED_PROXY_COUNT = int(os.environ.get("DJANGO_TRUSTED_PROXY_COUNT", "1"))
+try:
+    TRUSTED_PROXY_COUNT = int(os.environ.get("DJANGO_TRUSTED_PROXY_COUNT", "1"))
+except ValueError as exc:
+    raise RuntimeError("DJANGO_TRUSTED_PROXY_COUNT は整数で指定してください。") from exc
+if TRUSTED_PROXY_COUNT != 1:
+    raise RuntimeError(
+        "このCompose構成の DJANGO_TRUSTED_PROXY_COUNT は Nginx 1段に合わせて1です。"
+    )
+ALLAUTH_TRUSTED_PROXY_COUNT = TRUSTED_PROXY_COUNT
 
 # 本番でパスキーの origin 検査を緩めることは無い。環境変数からも読まない。
 MFA_WEBAUTHN_ALLOW_INSECURE_ORIGIN = False

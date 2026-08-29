@@ -203,11 +203,16 @@ class LoginByCodeTests(TestCase):
         # 未登録のアドレスへメールは送らない。
         self.assertEqual(len(mail.outbox), 0)
 
-    @override_settings(ACCOUNT_LOGIN_BY_CODE_TIMEOUT=0)
     def test_expired_code_is_rejected(self):
         """有効期限を過ぎたコードは使えない。"""
         self.client.post(self.request_url, {"email": "code@example.com"})
         code = extract_code(mail.outbox[0])
+
+        session = self.client.session
+        pending_login = session["account_login"]
+        pending_login["state"]["stages"]["login_by_code"]["data"]["at"] = 0
+        session["account_login"] = pending_login
+        session.save()
 
         self.client.post(self.confirm_url, {"code": code})
         self.assertNotIn("_auth_user_id", self.client.session)

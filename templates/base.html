@@ -43,7 +43,7 @@
   <link rel="stylesheet" href="{% static 'css/site.css' %}">
   {# サイト設定で決めたアクセント色だけを差し込む。            #}
   {# 値は #rrggbb 形式に検証済みなので、CSS へ注入されない。    #}
-  <style>
+  <style nonce="{{ request.csp_nonce }}">
     :root { --accent: {{ site_setting.accent_color }}; }
     @media (prefers-color-scheme: dark) {
       :root { --accent: {{ site_setting.accent_color_dark }}; }

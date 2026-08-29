@@ -112,6 +112,11 @@ HTML コメントなので GitHub 上では表示されません。
 
 ## 記事一覧
 
+### 下書き
+
+- [Django CMSの認可不備を直す――公開記事を承認フローの外で変えさせない](security-remediation-2026-08-29.md)
+  （status: draft）
+
 ### 第1部：CMS を作る
 
 | 日 | 記事 | タグ |

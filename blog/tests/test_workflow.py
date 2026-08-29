@@ -1,7 +1,9 @@
 """5日目: 下書き・レビュー・承認・予約投稿・リビジョンのテスト。"""
 
+import json
 from datetime import timedelta
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -9,7 +11,18 @@ from django.utils import timezone
 from blog.models import Article, ArticleRevision
 from core.models import AuditLog
 
-from .factories import create_article, create_author, create_category, create_editor
+from .factories import (
+    add_totp,
+    create_article,
+    create_author,
+    create_category,
+    create_editor,
+    create_staff,
+    create_user,
+    grant,
+    login_staff,
+    verify_email,
+)
 
 PASSWORD = "test-pass-phrase-1234"
 
@@ -31,8 +44,8 @@ class PublishPermissionTests(TestCase):
         }
 
     def test_author_cannot_choose_published_in_form(self):
-        create_author(username="plain-author")
-        self.client.login(username="plain-author", password=PASSWORD)
+        author = create_author(username="plain-author")
+        login_staff(self.client, author)
 
         response = self.client.get(self.url)
         choices = dict(response.context["form"].fields["status"].choices)
@@ -42,22 +55,55 @@ class PublishPermissionTests(TestCase):
 
     def test_author_posting_published_is_rejected(self):
         """画面に出ていなくても POST は直接送れる。サーバー側で必ず弾く。"""
-        create_author(username="sneaky")
-        self.client.login(username="sneaky", password=PASSWORD)
+        author = create_author(username="sneaky")
+        login_staff(self.client, author)
 
         response = self.client.post(self.url, self._payload(Article.Status.PUBLISHED))
         self.assertEqual(response.status_code, 200)  # フォーム再表示
         self.assertFalse(Article.objects.filter(title="権限テスト記事").exists())
 
     def test_editor_can_publish_directly(self):
-        create_editor(username="direct-editor")
-        self.client.login(username="direct-editor", password=PASSWORD)
+        editor = create_editor(username="direct-editor")
+        login_staff(self.client, editor)
 
         response = self.client.post(self.url, self._payload(Article.Status.PUBLISHED))
         self.assertEqual(response.status_code, 302)
 
         article = Article.objects.get(title="権限テスト記事")
         self.assertTrue(article.is_visible_to_public)
+
+
+class AdminArticlePermissionTests(TestCase):
+    def setUp(self):
+        self.category = create_category()
+        self.author = create_author(username="admin-article-author")
+        self.staff = create_staff(username="admin-article-staff")
+        self.article = create_article(
+            title="他人の公開記事",
+            author=self.author,
+            category=self.category,
+            status=Article.Status.PUBLISHED,
+        )
+
+    def test_unrelated_staff_cannot_open_article_change_form(self):
+        login_staff(self.client, self.staff)
+
+        response = self.client.get(
+            reverse("admin:blog_article_change", args=[self.article.pk])
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("admin:index"), response.url)
+
+    def test_non_publisher_cannot_choose_publication_fields_on_add(self):
+        login_staff(self.client, self.staff)
+
+        response = self.client.get(reverse("admin:blog_article_add"))
+
+        self.assertEqual(response.status_code, 200)
+        fields = response.context["adminform"].form.fields
+        self.assertNotIn("status", fields)
+        self.assertNotIn("published_at", fields)
 
 
 class ReviewWorkflowTests(TestCase):
@@ -82,18 +128,18 @@ class ReviewWorkflowTests(TestCase):
 
     def test_workflow_urls_reject_get(self):
         """状態を変える URL は GET を受け付けない。"""
-        self.client.login(username="wf-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         self.assertEqual(self.client.get(self.submit_url).status_code, 405)
 
     def test_author_submits_for_review(self):
-        self.client.login(username="wf-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         response = self.client.post(self.submit_url)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self._refresh().status, Article.Status.REVIEW)
 
     def test_stranger_cannot_submit(self):
-        create_author(username="wf-stranger")
-        self.client.login(username="wf-stranger", password=PASSWORD)
+        stranger = create_author(username="wf-stranger")
+        login_staff(self.client, stranger)
         response = self.client.post(self.submit_url)
         self.assertEqual(response.status_code, 403)
         self.assertEqual(self._refresh().status, Article.Status.DRAFT)
@@ -102,23 +148,109 @@ class ReviewWorkflowTests(TestCase):
         self.article.status = Article.Status.REVIEW
         self.article.save()
 
-        self.client.login(username="wf-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         response = self.client.post(self.approve_url)
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(self._refresh().status, Article.Status.REVIEW)
+
+    def test_reviewer_without_change_permission_cannot_approve_or_reject(self):
+        reviewer = grant(
+            create_user(username="wf-review-only"),
+            "blog.review_article",
+            "blog.publish_article",
+        )
+        add_totp(reviewer)
+        verify_email(reviewer)
+        self.article.status = Article.Status.REVIEW
+        self.article.save()
+        login_staff(self.client, reviewer)
+
+        self.assertEqual(self.client.post(self.approve_url).status_code, 403)
+        self.assertEqual(self._refresh().status, Article.Status.REVIEW)
+        self.assertEqual(self.client.post(self.reject_url).status_code, 403)
         self.assertEqual(self._refresh().status, Article.Status.REVIEW)
 
     def test_editor_approves_and_publishes(self):
         self.article.status = Article.Status.REVIEW
         self.article.save()
 
-        self.client.login(username="wf-editor", password=PASSWORD)
-        response = self.client.post(self.approve_url)
+        login_staff(self.client, self.editor)
+        response = self.client.post(
+            self.approve_url, {"version": self.article.version}
+        )
         self.assertEqual(response.status_code, 302)
 
         article = self._refresh()
         self.assertEqual(article.status, Article.Status.PUBLISHED)
         self.assertIsNotNone(article.published_at)
         self.assertTrue(article.is_visible_to_public)
+
+    def test_approval_without_reviewed_version_is_rejected(self):
+        self.article.status = Article.Status.REVIEW
+        self.article.save()
+        login_staff(self.client, self.editor)
+
+        response = self.client.post(self.approve_url)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._refresh().status, Article.Status.REVIEW)
+
+    def test_autosave_after_review_requires_reinspection_before_approval(self):
+        self.article.status = Article.Status.REVIEW
+        self.article.save()
+        reviewed_version = self.article.version
+        login_staff(self.client, self.author)
+        response = self.client.post(
+            reverse("dashboard:autosave", args=[self.article.pk]),
+            data=json.dumps(
+                {
+                    "title": "確認後に差し替えた題名",
+                    "blocks": [
+                        {
+                            "type": "paragraph",
+                            "data": {"text": "確認後に差し替えた本文"},
+                        }
+                    ],
+                    "version": reviewed_version,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        login_staff(self.client, self.editor)
+        response = self.client.post(
+            self.approve_url, {"version": reviewed_version}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        article = self._refresh()
+        self.assertEqual(article.status, Article.Status.REVIEW)
+        self.assertEqual(article.title, "確認後に差し替えた題名")
+
+    def test_restore_after_review_requires_reinspection_before_approval(self):
+        revision = self.article.snapshot(created_by=self.author, note="確認前")
+        self.article.body = "レビュー担当が確認した本文"
+        self.article.save()
+        self.article.status = Article.Status.REVIEW
+        self.article.save()
+        reviewed_version = self.article.version
+        login_staff(self.client, self.author)
+        response = self.client.post(
+            reverse(
+                "blog:article_revision_restore",
+                args=[self.article.slug, revision.pk],
+            )
+        )
+        self.assertEqual(response.status_code, 302)
+
+        login_staff(self.client, self.editor)
+        response = self.client.post(
+            self.approve_url, {"version": reviewed_version}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._refresh().status, Article.Status.REVIEW)
 
     def test_editor_cannot_approve_own_article(self):
         """自分の記事を自分で承認できると、承認フローが形だけになる。"""
@@ -129,7 +261,7 @@ class ReviewWorkflowTests(TestCase):
             status=Article.Status.REVIEW,
             published_at=None,
         )
-        self.client.login(username="wf-editor", password=PASSWORD)
+        login_staff(self.client, self.editor)
         response = self.client.post(
             reverse("blog:article_approve", args=[own.slug])
         )
@@ -139,7 +271,7 @@ class ReviewWorkflowTests(TestCase):
         self.assertEqual(own.status, Article.Status.REVIEW)
 
     def test_cannot_approve_draft(self):
-        self.client.login(username="wf-editor", password=PASSWORD)
+        login_staff(self.client, self.editor)
         self.client.post(self.approve_url)
         self.assertEqual(self._refresh().status, Article.Status.DRAFT)
 
@@ -147,7 +279,7 @@ class ReviewWorkflowTests(TestCase):
         self.article.status = Article.Status.REVIEW
         self.article.save()
 
-        self.client.login(username="wf-editor", password=PASSWORD)
+        login_staff(self.client, self.editor)
         response = self.client.post(self.reject_url, {"note": "出典を追記してください"})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self._refresh().status, Article.Status.DRAFT)
@@ -170,7 +302,11 @@ class EditorCanEditOthersArticleTests(TestCase):
         self.author = create_author(username="edit-author")
         self.editor = create_editor(username="edit-editor")
         self.article = create_article(
-            title="他人の記事", author=self.author, category=self.category
+            title="他人の記事",
+            author=self.author,
+            category=self.category,
+            status=Article.Status.DRAFT,
+            published_at=None,
         )
 
     def test_editor_is_not_staff(self):
@@ -178,14 +314,14 @@ class EditorCanEditOthersArticleTests(TestCase):
         self.assertFalse(self.editor.is_staff)
 
     def test_editor_can_open_edit_form(self):
-        self.client.login(username="edit-editor", password=PASSWORD)
+        login_staff(self.client, self.editor)
         response = self.client.get(
             reverse("blog:article_update", args=[self.article.slug])
         )
         self.assertEqual(response.status_code, 200)
 
     def test_editor_can_view_revisions(self):
-        self.client.login(username="edit-editor", password=PASSWORD)
+        login_staff(self.client, self.editor)
         response = self.client.get(
             reverse("blog:article_revisions", args=[self.article.slug])
         )
@@ -198,7 +334,7 @@ class EditorCanEditOthersArticleTests(TestCase):
         from django.core.cache import cache
 
         cache.clear()
-        self.client.login(username="edit-editor", password=PASSWORD)
+        login_staff(self.client, self.editor)
         response = self.client.post(
             reverse("dashboard:autosave", args=[self.article.pk]),
             data=json.dumps(
@@ -214,8 +350,8 @@ class EditorCanEditOthersArticleTests(TestCase):
 
     def test_plain_author_still_cannot_edit_others(self):
         """権限を広げすぎていないこと。投稿者は他人の記事を触れない。"""
-        create_author(username="edit-plain")
-        self.client.login(username="edit-plain", password=PASSWORD)
+        author = create_author(username="edit-plain")
+        login_staff(self.client, author)
         response = self.client.get(
             reverse("blog:article_update", args=[self.article.slug])
         )
@@ -256,8 +392,11 @@ class ScheduledPublishTests(TestCase):
             status=Article.Status.REVIEW,
             published_at=future,
         )
-        self.client.login(username="sched-editor", password=PASSWORD)
-        self.client.post(reverse("blog:article_approve", args=[article.slug]))
+        login_staff(self.client, self.editor)
+        self.client.post(
+            reverse("blog:article_approve", args=[article.slug]),
+            {"version": article.version},
+        )
 
         article.refresh_from_db()
         self.assertEqual(article.status, Article.Status.PUBLISHED)
@@ -292,7 +431,7 @@ class RevisionTests(TestCase):
         )
 
     def test_editing_creates_revision_of_previous_content(self):
-        self.client.login(username="rev-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         self._edit("2番目のタイトル", "2番目の本文")
 
         revision = ArticleRevision.objects.get(article=self.article)
@@ -304,7 +443,7 @@ class RevisionTests(TestCase):
         self.assertEqual(self.article.title, "2番目のタイトル")
 
     def test_restore_brings_back_old_content(self):
-        self.client.login(username="rev-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         self._edit("2番目のタイトル", "2番目の本文")
 
         revision = ArticleRevision.objects.get(article=self.article)
@@ -320,7 +459,7 @@ class RevisionTests(TestCase):
 
     def test_restore_also_snapshots_current_content(self):
         """復元は取り消せる。復元前の内容も版として残る。"""
-        self.client.login(username="rev-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         self._edit("2番目のタイトル", "2番目の本文")
 
         revision = ArticleRevision.objects.get(article=self.article)
@@ -338,8 +477,8 @@ class RevisionTests(TestCase):
         self.assertIn("最初のタイトル", titles)
         self.assertIn("2番目のタイトル", titles)
 
-    def test_restore_does_not_change_publish_status(self):
-        """本文だけ戻す。復元操作が同時に公開状態を変えると事故になる。"""
+    def test_model_refuses_to_restore_over_published_article(self):
+        """公開中の承認済み本文を、モデルの直接呼び出しでも上書きさせない。"""
         editor = create_editor(username="rev-editor")
         article = create_article(
             title="公開中の記事",
@@ -352,16 +491,79 @@ class RevisionTests(TestCase):
 
         article.body = "書き換え後"
         article.save()
-        revision.restore_to_article(restored_by=editor)
+
+        with self.assertRaises(ValidationError):
+            revision.restore_to_article(restored_by=editor)
 
         article.refresh_from_db()
-        self.assertEqual(article.body, "公開時の本文")
+        self.assertEqual(article.body, "書き換え後")
         self.assertEqual(article.status, Article.Status.PUBLISHED)
         self.assertTrue(article.is_visible_to_public)
 
+    def test_model_refetches_status_before_restoring(self):
+        """呼出し側のArticleが古くても、DB上の公開状態を再検査する。"""
+        revision = self.article.snapshot(created_by=self.author, note="下書き時")
+        self.assertEqual(revision.article.status, Article.Status.DRAFT)
+        Article.objects.filter(pk=self.article.pk).update(
+            status=Article.Status.PUBLISHED,
+            published_at=timezone.now(),
+        )
+
+        with self.assertRaises(ValidationError):
+            revision.restore_to_article(restored_by=self.author)
+
+        self.article.refresh_from_db()
+        self.assertEqual(self.article.status, Article.Status.PUBLISHED)
+
+    def test_restore_view_does_not_mutate_published_article(self):
+        article = create_article(
+            title="公開記事",
+            author=self.author,
+            category=self.category,
+            body="承認済み本文",
+            status=Article.Status.PUBLISHED,
+        )
+        revision = article.snapshot(created_by=self.author, note="公開時")
+        article.body = "現在の公開本文"
+        article.save()
+        login_staff(self.client, self.author)
+
+        response = self.client.post(
+            reverse(
+                "blog:article_revision_restore", args=[article.slug, revision.pk]
+            )
+        )
+
+        self.assertEqual(response.status_code, 302)
+        article.refresh_from_db()
+        self.assertEqual(article.body, "現在の公開本文")
+        self.assertEqual(article.status, Article.Status.PUBLISHED)
+
+    def test_revoked_owner_cannot_restore_revision(self):
+        from .factories import create_user
+
+        owner = create_user(username="rev-revoked")
+        article = create_article(
+            title="権限剥奪記事",
+            author=owner,
+            category=self.category,
+            status=Article.Status.DRAFT,
+            published_at=None,
+        )
+        revision = article.snapshot(created_by=owner, note="保存版")
+        self.client.login(username=owner.username, password=PASSWORD)
+
+        response = self.client.post(
+            reverse(
+                "blog:article_revision_restore", args=[article.slug, revision.pk]
+            )
+        )
+
+        self.assertEqual(response.status_code, 403)
+
     def test_stranger_cannot_view_revisions(self):
-        create_author(username="rev-stranger")
-        self.client.login(username="rev-stranger", password=PASSWORD)
+        stranger = create_author(username="rev-stranger")
+        login_staff(self.client, stranger)
         response = self.client.get(
             reverse("blog:article_revisions", args=[self.article.slug])
         )
@@ -374,7 +576,7 @@ class AuditLogTests(TestCase):
         self.author = create_author(username="log-author")
 
     def test_create_is_recorded(self):
-        self.client.login(username="log-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         self.client.post(
             reverse("blog:article_create"),
             {
@@ -394,7 +596,7 @@ class AuditLogTests(TestCase):
         article = create_article(
             title="消える記事", author=self.author, category=self.category
         )
-        self.client.login(username="log-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         self.client.post(reverse("blog:article_delete", args=[article.slug]))
 
         entry = AuditLog.objects.get(action=AuditLog.Action.DELETE)
@@ -403,7 +605,7 @@ class AuditLogTests(TestCase):
         self.assertFalse(Article.objects.filter(pk=article.pk).exists())
 
     def test_ip_is_hashed_in_log(self):
-        self.client.login(username="log-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         self.client.post(
             reverse("blog:article_create"),
             {

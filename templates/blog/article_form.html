@@ -33,7 +33,9 @@
 
           <div class="editor" id="block-editor"
                {% if object.pk %}
-                 data-autosave-url="{% url 'dashboard:autosave' object.pk %}"
+                 {% if object.status != "published" %}
+                   data-autosave-url="{% url 'dashboard:autosave' object.pk %}"
+                 {% endif %}
                  data-version="{{ object.version }}"
                {% endif %}>
             <div class="editor__toolbar">

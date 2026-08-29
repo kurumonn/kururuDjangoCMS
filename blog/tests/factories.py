@@ -47,9 +47,12 @@ def grant(user, *codenames):
 def create_author(username="writer", **kwargs):
     """記事を投稿・編集・削除できる一般ユーザー。"""
     user = create_user(username=username, **kwargs)
-    return grant(
+    user = grant(
         user, "blog.add_article", "blog.change_article", "blog.delete_article"
     )
+    add_totp(user)
+    verify_email(user)
+    return user
 
 
 def create_staff(username="editor", **kwargs):
@@ -106,7 +109,11 @@ def login_staff(client, user, password="test-pass-phrase-1234"):
     進めないので、近道でログインしたテストだけが落ちる。
     """
     from accounts.testing import login_through_allauth
+    from django.core.cache import cache
 
+    # allauth のIP/キー単位レート制限を別テストから持ち越さない。
+    client.logout()
+    cache.clear()
     login_through_allauth(client, user, password)
 
 
@@ -118,7 +125,7 @@ def create_editor(username="reviewer", **kwargs):
     権限が足りない、という食い違いが起きる。
     """
     user = create_user(username=username, **kwargs)
-    return grant(
+    user = grant(
         user,
         "blog.add_article",
         "blog.change_article",
@@ -129,6 +136,9 @@ def create_editor(username="reviewer", **kwargs):
         "comments.delete_comment",
         "comments.view_comment",
     )
+    add_totp(user)
+    verify_email(user)
+    return user
 
 
 def create_category(name="お知らせ", **kwargs):

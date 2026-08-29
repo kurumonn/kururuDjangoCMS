@@ -27,6 +27,25 @@ class HealthzTests(TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["status"], "error")
 
+    def test_returns_503_when_shared_cache_is_down(self):
+        """Redis が落ちたらセッションと認証レート制限を保証できない。"""
+        with mock.patch(
+            "core.views.cache.set", side_effect=Exception("redis unavailable")
+        ):
+            response = self.client.get(reverse("healthz"))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"status": "error"})
+
+    def test_returns_503_when_shared_cache_does_not_round_trip(self):
+        with mock.patch("core.views.cache.set"), mock.patch(
+            "core.views.cache.get", return_value=None
+        ):
+            response = self.client.get(reverse("healthz"))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"status": "error"})
+
     def test_does_not_leak_the_error_detail(self):
         """失敗の中身を外へ出さないこと。
 

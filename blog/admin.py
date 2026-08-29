@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import Article, ArticleRevision, Category, ReusableBlock, Tag
+from .permissions import can_edit, can_publish, can_review
 
 
 @admin.register(ReusableBlock)
@@ -59,6 +60,33 @@ class ArticleAdmin(admin.ModelAdmin):
         ),
     )
 
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        if can_review(request.user):
+            return queryset
+        return queryset.filter(author=request.user)
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly = list(super().get_readonly_fields(request, obj))
+        if not can_publish(request.user):
+            readonly.extend(("status", "published_at"))
+        return tuple(readonly)
+
+    def has_change_permission(self, request, obj=None):
+        if not super().has_change_permission(request, obj):
+            return False
+        if obj is None:
+            return True
+        # 公開中の本文は publish 権限なしで管理画面から直接変えない。
+        if obj.status == Article.Status.PUBLISHED and not can_publish(request.user):
+            return False
+        return can_edit(request.user, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if not super().has_delete_permission(request, obj):
+            return False
+        return obj is None or can_edit(request.user, obj)
+
     def save_model(self, request, obj, form, change):
         # 著者が未設定なら、操作したユーザーを著者にする。
         if not obj.author_id:
@@ -86,3 +114,21 @@ class ArticleRevisionAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        if not request.user.has_perm("blog.change_article"):
+            return queryset.none()
+        if can_review(request.user):
+            return queryset
+        return queryset.filter(article__author=request.user)
+
+    def has_view_permission(self, request, obj=None):
+        if not super().has_view_permission(request, obj):
+            return False
+        if obj is None:
+            return request.user.has_perm("blog.change_article")
+        return can_edit(request.user, obj.article)
