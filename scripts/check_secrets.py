@@ -25,7 +25,11 @@ def main() -> int:
     findings = json.loads(completed.stdout).get("results", {})
     if findings:
         for path, candidates in sorted(findings.items()):
+            message = f"Potential secrets found: {len(candidates)} candidate(s)"
             print(f"Potential secrets found in {path}: {len(candidates)}")
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                safe_path = path.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                print(f"::error file={safe_path}::{message}")
         return 1
     print("detect-secrets: no candidates")
     return 0
