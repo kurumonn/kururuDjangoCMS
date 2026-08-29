@@ -1,13 +1,13 @@
-"""管理画面へ入る利用者に多要素認証を必須にするミドルウェア。
+"""管理画面または高影響CMS権限を持つ利用者へMFAを必須にする。
 
 なぜ必要か:
 
 管理画面は「全記事を書き換えられる」「利用者を作れる」「権限を配れる」場所です。
 ここのパスワードが1つ漏れるだけで、サイト全体が乗っ取られます。
 
-一方、記事を書くだけの利用者にまで多要素認証を強制すると、
-運用が回らなくなって「じゃあ全員 is_staff にしよう」といった逆流が起きます。
-そこで **対象を is_staff だけに絞って** 必須化します。
+一方、記事を閲覧するだけの利用者にまで多要素認証を強制すると運用が回りません。
+そこで is_staff に加え、公開・承認・削除という高影響権限を持つ利用者に
+対象を限定して必須化します。
 
 判定は2段構えにします。
 
@@ -69,7 +69,7 @@ INDEPENDENT_LOGIN_METHODS = frozenset(
 
 
 class StaffMfaRequiredMiddleware:
-    """is_staff の利用者に多要素認証の登録を求める。"""
+    """staff または高影響権限の利用者に多要素認証を求める。"""
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -138,10 +138,17 @@ class StaffMfaRequiredMiddleware:
             return True
 
         user = getattr(request, "user", None)
-        if user is None or not user.is_authenticated or not user.is_staff:
+        if user is None or not user.is_authenticated or not self._requires_mfa(user):
             return True
 
         return request.path.startswith(self._exempt_prefixes)
+
+    @staticmethod
+    def _requires_mfa(user) -> bool:
+        if user.is_staff:
+            return True
+        permissions = getattr(settings, "MFA_REQUIRED_PERMISSIONS", ())
+        return any(user.has_perm(permission) for permission in permissions)
 
     @staticmethod
     def _has_authenticator(user) -> bool:

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 from django.core.cache import cache
@@ -166,7 +167,9 @@ class MetaTagTests(CacheClearingTestCase):
             status=Article.Status.DRAFT,
             published_at=None,
         )
-        self.client.login(username="seo-editor", password="test-pass-phrase-1234")
+        from blog.tests.factories import login_staff
+
+        login_staff(self.client, editor)
         response = self.client.get(draft.get_absolute_url())
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'content="noindex, nofollow"')
@@ -188,15 +191,14 @@ class JsonLdTests(CacheClearingTestCase):
 
     def _extract_json_ld(self, content: str) -> list[dict]:
         """レスポンスから ld+json ブロックを取り出して JSON として読む。"""
-        blocks = []
-        marker = '<script type="application/ld+json">'
-        start = content.find(marker)
-        while start != -1:
-            begin = start + len(marker)
-            end = content.find("</script>", begin)
-            blocks.append(json.loads(content[begin:end]))
-            start = content.find(marker, end)
-        return blocks
+        return [
+            json.loads(match.group(1))
+            for match in re.finditer(
+                r'<script\b[^>]*\btype="application/ld\+json"[^>]*>(.*?)</script>',
+                content,
+                re.DOTALL,
+            )
+        ]
 
     def test_article_json_ld_is_valid_json(self):
         article = create_article(title="JSON-LDテスト", category=self.category)

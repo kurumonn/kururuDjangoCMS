@@ -20,12 +20,15 @@ __pycache__
 *.key
 credentials.json
 secrets/
+.local-backup-key
+.local-certs/
 
 # 開発用の成果物
 db.sqlite3
 db.sqlite3-journal
 staticfiles/
 media/
+backups/
 *.log
 
 # ドキュメントとツール（実行には要らない）

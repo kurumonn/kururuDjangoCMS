@@ -57,6 +57,7 @@ urlpatterns = [
     path("accounts/", include("allauth.urls")),
     path("dashboard/", include("dashboard.urls")),
     path("pages/", include("pages.urls")),
+    path("", include("cms_plugins.urls")),
     # sitemap.xml / feed / robots.txt はサイト直下に置く。
     path("", include("seo.urls")),
     path("", include("comments.urls")),

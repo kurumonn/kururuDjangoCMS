@@ -1,72 +1,112 @@
 #!/usr/bin/env bash
-# データベースとアップロード画像のバックアップを取る。
+# データベースとアップロード画像を、暗号化してバックアップする。
 #
 #   ./scripts/backup.sh
-#   ./scripts/backup.sh /mnt/backup       # 保存先を指定する
+#   ./scripts/backup.sh /mnt/backup
 #
 # 前提: compose の db / web コンテナが動いていること。
 set -euo pipefail
+umask 077
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 BACKUP_DIR="${1:-./backups}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
 
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 
-# .env から DB の名前とユーザーを読む。
-# ここで値を直書きすると、パスワードを変えたときにバックアップだけ古いまま失敗する。
+# .env には鍵そのものではなく、ホスト上の鍵ファイルのパスだけを書く。
 set -a
 # shellcheck disable=SC1091
 . ./.env
 set +a
 
-DB_DUMP="$BACKUP_DIR/db-$STAMP.dump"
-MEDIA_TAR="$BACKUP_DIR/media-$STAMP.tar.gz"
+: "${BACKUP_ENCRYPTION_KEY_FILE:?BACKUP_ENCRYPTION_KEY_FILE を .env に設定してください}"
+if [ ! -f "$BACKUP_ENCRYPTION_KEY_FILE" ]; then
+    echo "[backup] 暗号化鍵ファイルが見つかりません" >&2
+    exit 1
+fi
+KEY_MODE="$(stat -c '%a' "$BACKUP_ENCRYPTION_KEY_FILE")"
+if [ "$KEY_MODE" != "400" ] && [ "$KEY_MODE" != "600" ]; then
+    echo "[backup] 暗号化鍵ファイルの権限は 0400 または 0600 にしてください" >&2
+    exit 1
+fi
+command -v openssl > /dev/null || {
+    echo "[backup] openssl が必要です" >&2
+    exit 1
+}
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+command -v "$PYTHON_BIN" > /dev/null || {
+    echo "[backup] HMAC検証にPython 3が必要です" >&2
+    exit 1
+}
 
-echo "[backup] データベースを書き出します..."
-# -Fc はカスタム形式。テキストの SQL より小さく、
-# pg_restore で「テーブル単位の復元」ができる。
+DB_DUMP="$BACKUP_DIR/db-$STAMP.dump.enc"
+MEDIA_TAR="$BACKUP_DIR/media-$STAMP.tar.gz.enc"
+DB_HMAC="$DB_DUMP.hmac"
+MEDIA_HMAC="$MEDIA_TAR.hmac"
+DB_TEMP="$(mktemp "$BACKUP_DIR/.db-$STAMP.XXXXXX")"
+MEDIA_TEMP="$(mktemp "$BACKUP_DIR/.media-$STAMP.XXXXXX")"
+DB_HMAC_TEMP="$(mktemp "$BACKUP_DIR/.db-hmac-$STAMP.XXXXXX")"
+MEDIA_HMAC_TEMP="$(mktemp "$BACKUP_DIR/.media-hmac-$STAMP.XXXXXX")"
+
+cleanup() {
+    rm -f -- "$DB_TEMP" "$MEDIA_TEMP" "$DB_HMAC_TEMP" "$MEDIA_HMAC_TEMP"
+}
+trap cleanup EXIT
+
+encrypt() {
+    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 \
+        -pass "file:$BACKUP_ENCRYPTION_KEY_FILE"
+}
+
+decrypt() {
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+        -pass "file:$BACKUP_ENCRYPTION_KEY_FILE"
+}
+
+hmac_file() {
+    "$PYTHON_BIN" "$SCRIPT_DIR/hmac_file.py" \
+        "$BACKUP_ENCRYPTION_KEY_FILE" "$1"
+}
+
+echo "[backup] データベースを書き出して暗号化します..."
 docker compose exec -T db \
     pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc \
-    > "$DB_DUMP"
+    | encrypt > "$DB_TEMP"
 
-echo "[backup] アップロード画像を固めます..."
-# コンテナ内のパスは、必ず `sh -c '...'` の中へ入れる。
-# Windows の Git Bash は、引数に現れた /app のような絶対パスを
-# Windows のパスへ勝手に書き換える（MSYS のパス変換）。
-# 引用符でくくった1つの文字列にしておけば変換されない。
+echo "[backup] アップロード画像を固めて暗号化します..."
 docker compose exec -T web sh -c 'cd /app && tar -cz media' \
-    > "$MEDIA_TAR"
+    | encrypt > "$MEDIA_TEMP"
 
-# ★ここが本題★
-# 「バックアップを取った」ではなく「**戻せる**」ことを確かめる。
-# 取れているつもりのファイルが 0 バイトだった、という事故は珍しくない。
-echo "[backup] 取得したファイルを検査します..."
-if [ ! -s "$DB_DUMP" ]; then
-    echo "[backup] 失敗: データベースのダンプが空です" >&2
+# CBC暗号は単体では改ざんを検知できないため、復号前に検証するHMACを付ける。
+hmac_file "$DB_TEMP" > "$DB_HMAC_TEMP"
+hmac_file "$MEDIA_TEMP" > "$MEDIA_HMAC_TEMP"
+
+echo "[backup] 暗号化済みファイルを復号ストリームで検査します..."
+if [ ! -s "$DB_TEMP" ]; then
+    echo "[backup] 失敗: データベースのバックアップが空です" >&2
     exit 1
 fi
-# pg_restore --list は、ダンプの目次を読むだけで復元はしない。
-# 壊れたダンプならここで失敗する。
-#
-# ファイル名を渡さないのが要点。標準入力から読ませる。
-# `pg_restore --list /dev/stdin` と書くと
-# 「did not find magic string in file header」で必ず失敗する。
-# ファイル引数として開かれるとシークしようとするが、
-# パイプはシークできないためである。
-docker compose exec -T db sh -c 'pg_restore --list' < "$DB_DUMP" > /dev/null
-echo "[backup] ダンプの目次を読めました（壊れていません）。"
+decrypt < "$DB_TEMP" | docker compose exec -T db sh -c 'pg_restore --list' > /dev/null
 
-if [ ! -s "$MEDIA_TAR" ]; then
-    echo "[backup] 失敗: 画像のアーカイブが空です" >&2
+if [ ! -s "$MEDIA_TEMP" ]; then
+    echo "[backup] 失敗: 画像のバックアップが空です" >&2
     exit 1
 fi
-tar -tzf "$MEDIA_TAR" > /dev/null
-echo "[backup] 画像アーカイブを読めました。"
+decrypt < "$MEDIA_TEMP" | tar -tzf - > /dev/null
 
-echo "[backup] $KEEP_DAYS 日より古いバックアップを削除します..."
-find "$BACKUP_DIR" -name 'db-*.dump' -mtime "+$KEEP_DAYS" -delete
-find "$BACKUP_DIR" -name 'media-*.tar.gz' -mtime "+$KEEP_DAYS" -delete
+chmod 600 "$DB_TEMP" "$MEDIA_TEMP" "$DB_HMAC_TEMP" "$MEDIA_HMAC_TEMP"
+mv "$DB_TEMP" "$DB_DUMP"
+mv "$MEDIA_TEMP" "$MEDIA_TAR"
+mv "$DB_HMAC_TEMP" "$DB_HMAC"
+mv "$MEDIA_HMAC_TEMP" "$MEDIA_HMAC"
+
+echo "[backup] $KEEP_DAYS 日より古い暗号化バックアップを削除します..."
+find "$BACKUP_DIR" -name 'db-*.dump.enc' -mtime "+$KEEP_DAYS" -delete
+find "$BACKUP_DIR" -name 'media-*.tar.gz.enc' -mtime "+$KEEP_DAYS" -delete
+find "$BACKUP_DIR" -name '*.enc.hmac' -mtime "+$KEEP_DAYS" -delete
 
 echo "[backup] 完了:"
-ls -lh "$DB_DUMP" "$MEDIA_TAR"
+ls -lh "$DB_DUMP" "$DB_HMAC" "$MEDIA_TAR" "$MEDIA_HMAC"

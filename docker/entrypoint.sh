@@ -44,11 +44,27 @@ echo "[entrypoint] 本番向けの設定を検査します..."
 # 起動のたびに実行するのは、テストと違って「実行し忘れ」が起きないため。
 python manage.py check --deploy --fail-level WARNING
 
-echo "[entrypoint] マイグレーションを適用します..."
-python manage.py migrate --noinput
+APP_START_MODE="${APP_START_MODE:-web}"
 
-echo "[entrypoint] 静的ファイルを集めます..."
-python manage.py collectstatic --noinput
-
-echo "[entrypoint] 起動します: $*"
-exec "$@"
+case "$APP_START_MODE" in
+    migrate)
+        # Compose の one-shot release job だけが永続状態を変更する。
+        echo "[entrypoint] マイグレーションを1回だけ適用します..."
+        python manage.py migrate --noinput
+        echo "[entrypoint] 静的ファイルを集めます..."
+        python manage.py collectstatic --noinput
+        echo "[entrypoint] release job が完了しました。"
+        ;;
+    web|worker)
+        # 通常の web/worker 再起動は DB や static を変更しない。
+        # 未適用 migration があれば fail-closed で起動を止める。
+        echo "[entrypoint] 未適用マイグレーションが無いことを確認します..."
+        python manage.py migrate --check
+        echo "[entrypoint] 起動します: $*"
+        exec "$@"
+        ;;
+    *)
+        echo "[entrypoint] 不正な APP_START_MODE です: $APP_START_MODE" >&2
+        exit 64
+        ;;
+esac

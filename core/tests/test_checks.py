@@ -127,6 +127,16 @@ class ProxyCheckTests(SimpleTestCase):
         SECURE_SSL_REDIRECT=True,
         SECURE_PROXY_SSL_HEADER=PROXY_HEADER,
         TRUSTED_PROXY_COUNT=1,
+        ALLAUTH_TRUSTED_PROXY_COUNT=0,
+    )
+    def test_errors_when_allauth_uses_a_different_proxy_count(self):
+        self.assertIn("core.E003", ids(check_proxy_configuration(None)))
+
+    @override_settings(
+        SECURE_SSL_REDIRECT=True,
+        SECURE_PROXY_SSL_HEADER=PROXY_HEADER,
+        TRUSTED_PROXY_COUNT=1,
+        ALLAUTH_TRUSTED_PROXY_COUNT=1,
     )
     def test_correct_setup_is_quiet(self):
         self.assertEqual(check_proxy_configuration(None), [])

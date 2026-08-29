@@ -34,37 +34,13 @@
 
   // --- ブロックの定義 -----------------------------------------------------
   // サーバー側 blog/blocks.py の BLOCK_TYPES と対応させる。
-  var TYPES = {
-    heading: { label: "見出し", fields: [
-      { key: "level", type: "select", label: "レベル", options: [2, 3, 4], value: 2 },
-      { key: "text", type: "text", label: "テキスト" }
-    ]},
-    paragraph: { label: "段落", fields: [
-      { key: "text", type: "textarea", label: "本文" }
-    ]},
-    image: { label: "画像", fields: [
-      { key: "media_id", type: "number", label: "メディアID" },
-      { key: "alt", type: "text", label: "代替テキスト" },
-      { key: "caption", type: "text", label: "キャプション" }
-    ]},
-    code: { label: "コード", fields: [
-      { key: "language", type: "text", label: "言語（python など）" },
-      { key: "code", type: "textarea", label: "コード" }
-    ]},
-    quote: { label: "引用", fields: [
-      { key: "text", type: "textarea", label: "引用文" },
-      { key: "cite", type: "text", label: "出典" }
-    ]},
-    note: { label: "注意書き", fields: [
-      { key: "variant", type: "select", label: "種類",
-        options: ["info", "warning", "danger"], value: "info" },
-      { key: "text", type: "textarea", label: "本文" }
-    ]},
-    cta: { label: "行動喚起", fields: [
-      { key: "text", type: "text", label: "ボタンの文言" },
-      { key: "url", type: "text", label: "リンク先（https:// か / で始める）" }
-    ]}
-  };
+  var typeData = document.getElementById("block-editor-types");
+  var TYPES = {};
+  try {
+    TYPES = typeData ? JSON.parse(typeData.textContent) : {};
+  } catch (e) {
+    setStatus("ブロック定義を読み取れませんでした。", "error");
+  }
 
   var blocks = [];
 
@@ -104,10 +80,12 @@
       input = document.createElement("textarea");
     } else if (spec.type === "select") {
       input = document.createElement("select");
-      spec.options.forEach(function (option) {
+      (spec.options || []).forEach(function (option) {
         var el = document.createElement("option");
-        el.value = String(option);
-        el.textContent = String(option);
+        var value = (option && typeof option === "object") ? option.value : option;
+        var label = (option && typeof option === "object") ? option.label : option;
+        el.value = String(value);
+        el.textContent = String(label);
         input.appendChild(el);
       });
     } else {
@@ -295,6 +273,13 @@
   // --- 初期化 -------------------------------------------------------------
   blocks = parseInitial();
   render();
+
+  var toolbar = root.querySelector(".editor__toolbar");
+  Object.keys(TYPES).forEach(function (type) {
+    toolbar.appendChild(makeButton(TYPES[type].label, TYPES[type].label + "を追加", function () {
+      add(type);
+    }));
+  });
 
   root.querySelectorAll("[data-add-block]").forEach(function (button) {
     button.addEventListener("click", function () {

@@ -24,6 +24,8 @@ id_ed25519
 id_rsa
 credentials.json
 secrets/
+/.local-certs/
+/.local-backup-key
 
 # 記事用スクリーンショット — ブログ側にだけ載せるのでリポジトリには含めない
 # （tools/capture_screenshots.py でいつでも撮り直せる）
@@ -37,3 +39,7 @@ Thumbs.db
 
 # バックアップの実ファイル（10日目）
 /backups/
+
+# 外部プラグインwheelはビルド入力であり、CMS本体へコミットしない。
+/plugin_wheels/*
+!/plugin_wheels/.gitkeep

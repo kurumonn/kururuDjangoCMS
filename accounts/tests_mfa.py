@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -286,7 +287,7 @@ class TotpLoginTests(TestCase):
         response = self.client.post(reverse("mfa_authenticate"), {"code": code})
         self.assertEqual(response.status_code, 302)
 
-        self.assertEqual(self.client.get(reverse("dashboard:index")).status_code, 200)
+        self.assertIn("_auth_user_id", self.client.session)
 
 
 class RecoveryCodeTests(TestCase):
@@ -310,7 +311,7 @@ class RecoveryCodeTests(TestCase):
         )
         response = self.client.post(reverse("mfa_authenticate"), {"code": codes[0]})
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(self.client.get(reverse("dashboard:index")).status_code, 200)
+        self.assertIn("_auth_user_id", self.client.session)
 
     def test_recovery_code_cannot_be_reused(self):
         """一度使ったリカバリコードは二度と使えない。
@@ -403,6 +404,20 @@ class StaffMfaRequiredMiddlewareTests(TestCase):
         self.assertEqual(
             self.client.get(reverse("blog:article_list")).status_code, 200
         )
+
+    def test_non_staff_publisher_without_mfa_is_redirected(self):
+        publisher = make_user("mfa-publisher")
+        publisher.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="blog", codename="publish_article"
+            )
+        )
+        self.client.force_login(publisher)
+
+        response = self.client.get(reverse("blog:article_list"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("mfa_index"))
 
     def test_anonymous_is_not_affected(self):
         self.assertEqual(
@@ -605,6 +620,21 @@ class StaffSessionFactorTests(TestCase):
         self.assertEqual(
             self.client.get(reverse("blog:article_list")).status_code, 200
         )
+
+    def test_privileged_non_staff_cannot_use_a_passkey_alone(self):
+        publisher = make_user("factor-publisher")
+        publisher.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="blog", codename="publish_article"
+            )
+        )
+        passkey = add_passkey(publisher)
+        force_passkey_only_login(self.client, publisher, passkey)
+
+        response = self.client.get(reverse("blog:article_list"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("account_reauthenticate"), response.url)
 
     @override_settings(MFA_REQUIRED_FOR_STAFF=False)
     def test_gate_follows_the_same_switch(self):

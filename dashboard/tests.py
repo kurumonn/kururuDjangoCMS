@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 from datetime import timedelta
 
 from django.core.cache import cache
@@ -41,6 +42,14 @@ class DashboardViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("account_login"), response.url)
 
+    def test_authenticated_user_without_cms_permission_gets_403(self):
+        create_user(username="dash-reader")
+        self.client.login(username="dash-reader", password=PASSWORD)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
     def test_counts_are_correct(self):
         create_article(title="公開1", author=self.author, category=self.category)
         create_article(
@@ -64,7 +73,7 @@ class DashboardViewTests(TestCase):
             published_at=None,
         )
 
-        self.client.login(username="dash-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         counts = self.client.get(self.url).context["counts"]
 
         self.assertEqual(counts["published"], 1)
@@ -89,12 +98,42 @@ class DashboardViewTests(TestCase):
             published_at=None,
         )
 
-        self.client.login(username="dash-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         titles = {a.title for a in self.client.get(self.url).context["review_queue"]}
         self.assertEqual(titles, {"自分のレビュー"})
 
+    def test_author_counts_and_schedule_exclude_other_authors_articles(self):
+        other = create_author(username="dash-count-other")
+        create_article(
+            title="他人の下書き",
+            author=other,
+            category=self.category,
+            status=Article.Status.DRAFT,
+            published_at=None,
+        )
+        create_article(
+            title="他人の予約記事",
+            author=other,
+            category=self.category,
+            published_at=timezone.now() + timedelta(days=1),
+        )
+        create_article(
+            title="自分の下書き",
+            author=self.author,
+            category=self.category,
+            status=Article.Status.DRAFT,
+            published_at=None,
+        )
+
+        login_staff(self.client, self.author)
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context["counts"]["draft"], 1)
+        self.assertEqual(response.context["counts"]["scheduled"], 0)
+        self.assertNotContains(response, "他人の予約記事")
+
     def test_editor_sees_all_review_requests(self):
-        create_editor(username="dash-editor")
+        editor = create_editor(username="dash-editor")
         create_article(
             title="誰かのレビュー",
             author=self.author,
@@ -103,7 +142,7 @@ class DashboardViewTests(TestCase):
             published_at=None,
         )
 
-        self.client.login(username="dash-editor", password=PASSWORD)
+        login_staff(self.client, editor)
         response = self.client.get(self.url)
         titles = {a.title for a in response.context["review_queue"]}
         self.assertIn("誰かのレビュー", titles)
@@ -113,13 +152,13 @@ class DashboardViewTests(TestCase):
         article = create_article(title="コメント記事", category=self.category)
         Comment.objects.create(article=article, name="訪問者", body="未承認")
 
-        self.client.login(username="dash-author", password=PASSWORD)
+        login_staff(self.client, self.author)
         response = self.client.get(self.url)
         # 権限が無い人にはコメント欄自体を出さない。
         self.assertIsNone(response.context.get("pending_comments"))
 
-        create_editor(username="dash-mod")
-        self.client.login(username="dash-mod", password=PASSWORD)
+        moderator = create_editor(username="dash-mod")
+        login_staff(self.client, moderator)
         response = self.client.get(self.url)
         self.assertEqual(len(response.context["pending_comments"]), 1)
 
@@ -157,7 +196,7 @@ class AutosaveApiTests(TestCase):
 
     # --- 正常系 ---------------------------------------------------------
     def test_owner_can_autosave(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         response = self._post()
         self.assertEqual(response.status_code, 200)
 
@@ -169,17 +208,20 @@ class AutosaveApiTests(TestCase):
         self.assertEqual(self.article.title, "自動保存された題名")
         self.assertIn("自動保存された本文", self.article.body)
 
-    def test_staff_can_autosave_others_article(self):
+    def test_unrelated_staff_cannot_autosave_others_article(self):
         staff = create_staff(username="save-staff")
         login_staff(self.client, staff)
-        self.assertEqual(self._post().status_code, 200)
+        self.assertEqual(self._post().status_code, 403)
+
+        self.article.refresh_from_db()
+        self.assertEqual(self.article.title, "自動保存テスト")
 
     def test_response_version_allows_second_save(self):
         """2回続けて保存できる。
 
         返された version を使わないと、2回目が必ず 409 になる。
         """
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         first = self._post().json()
 
         second = self._post(self._payload(version=first["version"]))
@@ -196,16 +238,75 @@ class AutosaveApiTests(TestCase):
         self.assertFalse(response.json()["ok"])
 
     def test_other_user_cannot_autosave(self):
-        create_author(username="save-stranger")
-        self.client.login(username="save-stranger", password=PASSWORD)
+        stranger = create_author(username="save-stranger")
+        login_staff(self.client, stranger)
         response = self._post()
         self.assertEqual(response.status_code, 403)
 
         self.article.refresh_from_db()
         self.assertEqual(self.article.title, "自動保存テスト")
 
+    def test_owner_without_change_permission_cannot_autosave(self):
+        owner = create_user(username="save-revoked-owner")
+        article = create_article(
+            title="権限剥奪済みの記事",
+            author=owner,
+            category=self.category,
+            status=Article.Status.DRAFT,
+            published_at=None,
+        )
+        self.client.login(username=owner.username, password=PASSWORD)
+
+        response = self.client.post(
+            reverse("dashboard:autosave", args=[article.pk]),
+            data=json.dumps(self._payload(version=article.version)),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        article.refresh_from_db()
+        self.assertEqual(article.title, "権限剥奪済みの記事")
+
+    def test_published_article_is_not_mutated_by_autosave(self):
+        self.article.status = Article.Status.PUBLISHED
+        self.article.published_at = timezone.now()
+        self.article.save()
+        original_title = self.article.title
+        login_staff(self.client, self.owner)
+
+        response = self._post(self._payload(version=self.article.version))
+
+        self.assertEqual(response.status_code, 409)
+        self.article.refresh_from_db()
+        self.assertEqual(self.article.title, original_title)
+        self.assertEqual(self.article.status, Article.Status.PUBLISHED)
+
+    def test_publish_between_initial_read_and_lock_blocks_autosave(self):
+        """承認と競合しても、公開後へ古い本文を書き込まない。"""
+        login_staff(self.client, self.owner)
+        original_select_for_update = Article.objects.select_for_update
+
+        def publish_then_lock(*args, **kwargs):
+            Article.objects.filter(pk=self.article.pk).update(
+                status=Article.Status.PUBLISHED,
+                published_at=timezone.now(),
+            )
+            return original_select_for_update(*args, **kwargs)
+
+        with patch.object(
+            Article.objects,
+            "select_for_update",
+            side_effect=publish_then_lock,
+        ):
+            response = self._post()
+
+        self.assertEqual(response.status_code, 409)
+        self.article.refresh_from_db()
+        self.assertEqual(self.article.title, "自動保存テスト")
+        self.assertEqual(self.article.status, Article.Status.PUBLISHED)
+
     def test_unknown_article_returns_404(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         response = self.client.post(
             reverse("dashboard:autosave", args=[999999]),
             data=json.dumps(self._payload()),
@@ -214,7 +315,7 @@ class AutosaveApiTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_get_is_not_allowed(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         self.assertEqual(self.client.get(self.url).status_code, 405)
 
     def test_csrf_is_enforced(self):
@@ -223,7 +324,7 @@ class AutosaveApiTests(TestCase):
         自動保存は状態を変える口なので、外部サイトから叩けてはいけない。
         """
         client = self.client_class(enforce_csrf_checks=True)
-        client.login(username="save-owner", password=PASSWORD)
+        login_staff(client, self.owner)
         response = client.post(
             self.url,
             data=json.dumps(self._payload()),
@@ -233,14 +334,14 @@ class AutosaveApiTests(TestCase):
 
     # --- 入力検証 -------------------------------------------------------
     def test_broken_json_is_rejected(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         response = self.client.post(
             self.url, data="{not json", content_type="application/json"
         )
         self.assertEqual(response.status_code, 400)
 
     def test_invalid_block_is_rejected_with_message(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         response = self._post(
             self._payload(blocks=[{"type": "iframe", "data": {"src": "http://evil"}}])
         )
@@ -248,17 +349,17 @@ class AutosaveApiTests(TestCase):
         self.assertIn("未知のブロック種別", response.json()["error"])
 
     def test_missing_version_is_rejected(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         payload = self._payload()
         del payload["version"]
         self.assertEqual(self._post(payload).status_code, 400)
 
     def test_non_integer_version_is_rejected(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         self.assertEqual(self._post(self._payload(version="1")).status_code, 400)
 
     def test_oversized_payload_is_rejected(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         huge = "あ" * 300_000
         response = self._post(
             self._payload(blocks=[{"type": "paragraph", "data": {"text": huge}}])
@@ -272,7 +373,7 @@ class AutosaveApiTests(TestCase):
         時刻の比較で「1秒の許容」を入れていた頃は、
         同じ秒に起きたこの状況をすり抜けて上書きしてしまっていた。
         """
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
 
         stale_version = self.article.version
         # 別の場所で保存された、という状況を作る。
@@ -288,7 +389,7 @@ class AutosaveApiTests(TestCase):
 
     # --- レート制限 -----------------------------------------------------
     def test_rate_limit_blocks_flooding(self):
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
 
         version = self.article.version
         for i in range(12):
@@ -303,7 +404,7 @@ class AutosaveApiTests(TestCase):
     # --- 権限の境界 -----------------------------------------------------
     def test_autosave_does_not_change_publish_state(self):
         """自動保存で公開状態を変えられてはいけない。"""
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         self._post(
             self._payload(status="published", published_at=timezone.now().isoformat())
         )
@@ -314,7 +415,7 @@ class AutosaveApiTests(TestCase):
 
     def test_autosave_does_not_change_author(self):
         victim = create_user(username="save-victim")
-        self.client.login(username="save-owner", password=PASSWORD)
+        login_staff(self.client, self.owner)
         self._post(self._payload(author=victim.pk))
 
         self.article.refresh_from_db()

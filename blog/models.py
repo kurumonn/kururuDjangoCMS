@@ -10,7 +10,8 @@
 """
 
 from django.conf import settings
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 from django.urls import reverse
 from django.utils import timezone
 
@@ -447,14 +448,21 @@ class ArticleRevision(models.Model):
         書き戻す前に、いまの内容も1つの版として保存する。
         そうしないと「復元したけれど、やっぱり戻したい」ができなくなる。
         """
-        article = self.article
-        article.snapshot(created_by=restored_by, note="復元前の自動保存")
+        with transaction.atomic():
+            # self.article は呼出し前に読まれた古い状態かもしれない。
+            # 検査と更新に同じ、ロック済みの最新行を使う。
+            article = Article.objects.select_for_update().get(pk=self.article_id)
+            if article.status == Article.Status.PUBLISHED:
+                raise ValidationError(
+                    "公開中の記事へ直接復元はできません。"
+                    "下書きまたはレビュー待ちへ戻してから復元してください。"
+                )
+            article.snapshot(created_by=restored_by, note="復元前の自動保存")
 
-        article.title = self.title
-        article.body = self.body
-        article.blocks = self.blocks
-        # status と published_at は戻さない。
-        # 「公開中の記事の本文だけを古い版に戻す」が実務では最も多く、
-        # 復元操作が同時に公開状態まで変えると事故になる。
-        article.save(update_fields=["title", "body", "blocks", "updated_at"])
-        return article
+            article.title = self.title
+            article.body = self.body
+            article.blocks = self.blocks
+            # status と published_at は戻さない。本文復元とワークフロー状態の変更を
+            # 1操作へ混ぜず、状態遷移は権限を検査する専用Viewに限定する。
+            article.save(update_fields=["title", "body", "blocks", "updated_at"])
+            return article

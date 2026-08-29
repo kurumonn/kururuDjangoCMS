@@ -35,7 +35,7 @@
 
   {# 構造化データはテンプレートに手書きせず、Python 側で JSON を組み立てる。 #}
   {# 詳しくは seo/templatetags/seo_tags.py のコメントを参照。               #}
-  <script type="application/ld+json">{% article_json_ld article %}</script>
+  <script type="application/ld+json" nonce="{{ request.csp_nonce }}">{% article_json_ld article %}</script>
 {% endblock %}
 
 {% block breadcrumb %}
@@ -117,6 +117,7 @@
         {% if can_review and article.status == "review" %}
           <form method="post" action="{% url 'blog:article_approve' article.slug %}" class="inline-form">
             {% csrf_token %}
+            <input type="hidden" name="version" value="{{ article.version }}">
             <button type="submit" class="btn btn--primary">承認して公開</button>
           </form>
           <form method="post" action="{% url 'blog:article_reject' article.slug %}" class="inline-form">

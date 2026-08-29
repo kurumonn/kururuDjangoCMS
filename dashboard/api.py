@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import json
 
+from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.generic import View
 
 from blog.blocks import validate_blocks
 from blog.models import Article
+from blog.permissions import can_edit
 from comments.models import hash_ip
 from core.ratelimit import check_rate_limit, client_ip
 
@@ -72,9 +74,7 @@ class AutosaveView(View):
         # 画面側と同じ判定関数を使う。
         # ここで独自の条件を書くと、画面では編集できるのに
         # 自動保存だけ 403 になる、といった食い違いが起きる。
-        from blog.views import _can_edit
-
-        if not _can_edit(request.user, article):
+        if not can_edit(request.user, article):
             # 存在は知られているので 403 でよい（pk は本人が持っている前提）。
             return _error("この記事を編集する権限がありません。", 403)
 
@@ -99,14 +99,6 @@ class AutosaveView(View):
         client_version = payload.get("version")
         if not isinstance(client_version, int):
             return _error("version を送ってください。", 400)
-        if client_version != article.version:
-            return _error(
-                "他の場所でこの記事が更新されています。"
-                "ページを再読み込みしてから編集してください。",
-                409,
-                server_version=article.version,
-            )
-
         # --- 内容の検証 ---------------------------------------------------
         title = (payload.get("title") or "").strip()[:200]
         try:
@@ -115,12 +107,38 @@ class AutosaveView(View):
             message = getattr(exc, "messages", [str(exc)])[0]
             return _error(message, 400)
 
-        # 自動保存は「下書きの内容」だけを書き換える。
-        # 公開状態や公開日時は、明示的な操作でしか変えない。
-        if title:
-            article.title = title
-        article.blocks = blocks
-        article.save(update_fields=["title", "blocks", "body", "updated_at"])
+        # 状態・権限・versionの検査から保存まで同じ行ロックを保持する。
+        # 承認が並行した場合、先にロックした側が完了した後の最新状態を
+        # 後続側が再検査するので、公開後へ古い自動保存を書き込めない。
+        with transaction.atomic():
+            article = (
+                Article.objects.select_for_update().filter(pk=pk).first()
+            )
+            if article is None:
+                return _error("記事が見つかりません。", 404)
+            if not can_edit(request.user, article):
+                return _error("この記事を編集する権限がありません。", 403)
+            if article.status == Article.Status.PUBLISHED:
+                return _error(
+                    "公開中の記事は自動保存できません。"
+                    "下書きまたはレビュー待ちへ戻してから編集してください。",
+                    409,
+                )
+            if client_version != article.version:
+                return _error(
+                    "他の場所でこの記事が更新されています。"
+                    "ページを再読み込みしてから編集してください。",
+                    409,
+                    server_version=article.version,
+                )
+
+            # 自動保存は本文だけを書き換え、公開状態・日時には触れない。
+            if title:
+                article.title = title
+            article.blocks = blocks
+            article.save(
+                update_fields=["title", "blocks", "body", "updated_at"]
+            )
 
         return JsonResponse(
             {

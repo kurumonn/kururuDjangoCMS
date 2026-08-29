@@ -35,6 +35,14 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
 
 
+# プラグインコードはデプロイ時にインストールし、entry point名を明記する。
+# 管理画面からpip/GitHubを実行する機能は持たせない。
+KURURU_PLUGIN_PACKAGES = env_list("KURURU_PLUGIN_PACKAGES")
+from cms_plugins.discovery import discover_plugin_apps  # noqa: E402
+
+KURURU_PLUGIN_APPS = discover_plugin_apps(KURURU_PLUGIN_PACKAGES)
+
+
 # 管理画面のURLパス。既定の "admin" のままだと総当たり攻撃の的になるため、
 # 本番では環境変数で推測しにくい値へ変更する。
 # ただしこれは「発見されにくくする」対策であって、認証の代わりにはならない。
@@ -70,6 +78,7 @@ INSTALLED_APPS = [
     "allauth.mfa",
     # 自作アプリ
     "core",
+    "cms_plugins.apps.CmsPluginsConfig",
     "accounts",
     "blog",
     "pages",
@@ -77,10 +86,11 @@ INSTALLED_APPS = [
     "comments",
     "seo",
     "dashboard",
-]
+] + KURURU_PLUGIN_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "core.middleware.ContentSecurityPolicyMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -299,9 +309,15 @@ MFA_RECOVERY_CODES_SHOW_ONCE = True
 # パスキーやTOTPの削除など、重要な操作の前に再認証を求める。
 MFA_ALLOW_UNVERIFIED_EMAIL = False
 
-# 管理画面へ入れる利用者には多要素認証を必須にする。
-# 記事を書くだけの利用者にまで強制すると運用が回らないため、対象を絞る。
+# 管理画面または高影響CMS権限を持つ利用者には多要素認証を必須にする。
 MFA_REQUIRED_FOR_STAFF = env_bool("DJANGO_MFA_REQUIRED_FOR_STAFF", True)
+# is_staff は Django 管理画面の入口にすぎない。CMS では非staffにも
+# 公開・承認・削除を委譲できるため、高影響権限もMFA対象にする。
+MFA_REQUIRED_PERMISSIONS = (
+    "blog.publish_article",
+    "blog.review_article",
+    "blog.delete_article",
+)
 
 # ソーシャル側で確認済みのメールアドレスは、こちらで再確認しない。
 SOCIALACCOUNT_EMAIL_AUTHENTICATION = False
@@ -340,6 +356,9 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 500
 # 0 のとき X-Forwarded-For を一切信用しない（開発既定）。
 # Nginx の背後に置いたら 1 にする。
 TRUSTED_PROXY_COUNT = int(os.environ.get("DJANGO_TRUSTED_PROXY_COUNT", "0"))
+# django-allauth は ALLAUTH_ 接頭辞つきの設定だけを参照する。
+# 自作の監査・コメント制限と同じプロキシ段数を必ず使わせる。
+ALLAUTH_TRUSTED_PROXY_COUNT = TRUSTED_PROXY_COUNT
 
 # ---------------------------------------------------------------------------
 # セキュリティ既定値

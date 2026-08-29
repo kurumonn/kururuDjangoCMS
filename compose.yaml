@@ -16,7 +16,7 @@
 
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -24,6 +24,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
     # ポートを外へ出さない。
     # 5432 をホストへ公開すると、そのサーバーのファイアウォール次第で
     # インターネットから直接データベースへ届く。
@@ -35,32 +37,62 @@ services:
       retries: 10
 
   redis:
-    image: redis:8-alpine
+    image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     restart: unless-stopped
     # appendonly を有効にすると、再起動してもセッションが残る。
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     volumes:
       - redisdata:/data
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  web:
+  migrate:
     build: .
-    restart: unless-stopped
+    restart: "no"
     env_file:
       - .env
+    environment:
+      APP_START_MODE: "migrate"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
+      - staticfiles:/app/staticfiles
+      - media:/app/media
+    networks:
+      - backend
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_START_MODE: "web"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
       # nginx へ渡すために共有する。
       - staticfiles:/app/staticfiles
       - media:/app/media
+    networks:
+      - frontend
+      - backend
     # ここでもポートを公開しない。外からは必ず nginx を通す。
     healthcheck:
       # 中身は docker/healthcheck.py を参照。
@@ -73,19 +105,106 @@ services:
       retries: 5
       start_period: 40s
 
+  # 外部問い合わせフォームを導入した環境だけで有効化する。
+  # HTTPリクエストからSMTPを切り離し、DB Outboxを継続的に配送する。
+  contact_forms_worker:
+    profiles: ["contact-forms"]
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_START_MODE: "worker"
+    command:
+      - python
+      - manage.py
+      - process_contact_mail_outbox
+      - --poll-seconds
+      - "5"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_contact_forms_health"]
+      interval: 5m
+      timeout: 30s
+      retries: 3
+      start_period: 5m
+
+  # 保存期限切れデータの削除を即時実行し、その後は日次で繰り返す。
+  # 実行履歴はDBへ監査記録され、上記ヘルスチェックが停止・失敗を検知する。
+  contact_forms_maintenance:
+    profiles: ["contact-forms"]
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_START_MODE: "worker"
+    command:
+      - python
+      - manage.py
+      - run_contact_forms_maintenance
+      - --interval-seconds
+      - "86400"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_contact_forms_health"]
+      interval: 5m
+      timeout: 30s
+      retries: 3
+      start_period: 5m
+
   nginx:
-    image: nginx:1.29-alpine
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     restart: unless-stopped
     depends_on:
-      - web
+      web:
+        condition: service_healthy
+        # Compose経由でwebを更新・再起動したとき、ready後にNginxも追従する。
+        restart: true
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:?NGINX_SERVER_NAME is required}
+      # Nginx 組み込みの $host 等を envsubst の対象にしない。
+      NGINX_ENVSUBST_FILTER: ^NGINX_SERVER_NAME$
     ports:
       - "80:80"
+      - "443:443"
+    secrets:
+      - tls_certificate
+      - tls_private_key
     volumes:
-      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./docker/nginx/healthcheck.sh:/healthcheck.sh:ro
       # 読み取り専用でマウントする。
       # nginx が書き込める必要は無いので、権限は狭くしておく。
       - staticfiles:/var/www/static:ro
       - media:/var/www/media:ro
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+secrets:
+  tls_certificate:
+    file: ${TLS_CERTIFICATE_FILE:?TLS_CERTIFICATE_FILE is required}
+  tls_private_key:
+    file: ${TLS_PRIVATE_KEY_FILE:?TLS_PRIVATE_KEY_FILE is required}
+
+networks:
+  frontend:
+  backend:
+    internal: true
 
 volumes:
   pgdata:

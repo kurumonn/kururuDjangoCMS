@@ -96,9 +96,14 @@ python manage.py runserver
 
 `manage.py` は `config.settings.local`（開発用）を既定にしています。
 
+外部プラグインの作成、wheel固定、管理画面での有効化は
+[プラグイン開発・導入ガイド](docs/plugins.md)を参照してください。
+プラグイン実装コードはこのリポジトリへ置きません。
+
 ## 本番相当の構成で動かす（10日目以降）
 
-PostgreSQL・Redis・Nginx・Gunicorn を一式立ち上げます。
+PostgreSQL・Redis・Nginx・Gunicorn を一式立ち上げます。Nginx は80番を
+HTTPSへリダイレクトし、443番でTLS 1.2/1.3を終端します。
 
 ```bash
 cp .env.example .env
@@ -111,26 +116,54 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-手元で画面まで確認したいときは、TLS 終端を真似る上書き設定を足します。
+`TLS_CERTIFICATE_FILE` と `TLS_PRIVATE_KEY_FILE` には、ホスト上にある実際の
+証明書チェーンと秘密鍵を指定します。Compose は証明書が無ければ起動しません。
+
+手元で画面まで確認するときも、自己署名証明書を用意して実際のTLS経路を通します。
+`.env` の証明書パスをそのファイルへ向けてから上書き設定を足します。
+
+```bash
+python scripts/generate_local_tls.py
+```
 
 ```bash
 docker compose -f compose.yaml -f compose.local-check.yaml up -d --build
 ```
 
-`http://localhost/` が開きます。本番の Django 設定には手を入れず、
-Nginx が送るヘッダーだけを差し替える方式です。
+`https://localhost/` を開きます（自己署名証明書ではブラウザー警告が出ます）。
+HTTPをHTTPSに見せかけるヘッダー差し替えは行いません。
 
+起動時の migration と collectstatic は `migrate` という単発release jobだけが
+実行します。通常の`web`再起動は `migrate --check` だけを行い、未適用migrationが
+あれば起動を拒否します。NginxはWebのreadiness成功後にだけ起動します。
+<!-- release job とバックアップ訓練は別の運用ゲート。 -->
 ### バックアップと復元の訓練
+
+バックアップホストには OpenSSL と Python 3 が必要です。
+最初に、リポジトリ外のホスト上へバックアップ暗号化鍵を作ります。
+鍵自体は .env へ書かず、BACKUP_ENCRYPTION_KEY_FILE にはパスだけを設定します。
+
+```bash
+sudo install -d -m 0700 /etc/kururucms
+openssl rand -base64 48 | sudo tee /etc/kururucms/backup-passphrase > /dev/null
+sudo chmod 0600 /etc/kururucms/backup-passphrase
+```
 
 ```bash
 ./scripts/backup.sh
 ```
 
 ```bash
-./scripts/restore_drill.sh backups/db-20260805-090000.dump
+./scripts/restore_drill.sh \
+  backups/db-20260805-090000.dump.enc \
+  backups/media-20260805-090000.tar.gz.enc
 ```
 
-訓練は使い捨ての別データベースへ復元して件数を比べます。
+バックアップは AES-256-CBC（PBKDF2）で暗号化し、暗号文へHMAC-SHA-256を
+付けて復号前に改ざんを拒否します。ファイル権限は
+0600、保存ディレクトリは 0700 になります。平文ダンプはディスクへ
+保存しません。訓練は復号ストリームを使い捨ての別データベースと一時media
+ディレクトリへ復元し、DBの参照とmediaファイルのハッシュ計算まで行います。
 **本番のデータベースには触りません。**
 
 バックアップは「取れているか」ではなく「戻せるか」でしか価値が測れません。

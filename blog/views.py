@@ -36,38 +36,11 @@ from core.models import AuditLog, record
 
 from .forms import ArticleForm
 from .models import Article, ArticleRevision, Category, Tag
-
-
-# ---------------------------------------------------------------------------
-# 権限判定
-# ---------------------------------------------------------------------------
-def _can_edit(user, article: Article) -> bool:
-    """記事を編集・削除してよいか。
-
-    判定をここ1か所にまとめる。View・テンプレート・API で
-    別々の条件を書くと、片方だけ直し忘れて権限が抜ける。
-
-    「他人の記事も編集してよい人」の判定に is_staff だけを使わないこと。
-    is_staff は「Django の管理画面へ入れる」という意味であって、
-    「編集者である」という意味ではない。
-
-    この CMS では、編集者ロールに blog.review_article を与えている。
-    レビューして公開する役目である以上、本文を直せなければ仕事にならない。
-    is_staff だけを見ていると、編集者が他人の記事を開いた瞬間に 403 になる。
-    """
-    if not user.is_authenticated:
-        return False
-    if user.is_staff:
-        return True
-    # 編集者（レビュー権限を持つ人）は、どの記事でも編集できる。
-    if user.has_perm("blog.review_article"):
-        return True
-    return article.author_id == user.pk
-
-
-def _can_review(user) -> bool:
-    """他人の記事のレビューを承認・差し戻しできるか。"""
-    return user.is_authenticated and user.has_perm("blog.review_article")
+from .permissions import (
+    can_edit as _can_edit,
+    can_publish as _can_publish,
+    can_review as _can_review,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +80,7 @@ class ArticleDetailView(DetailView):
             return article
 
         user = self.request.user
-        if user.is_authenticated and (
-            user == article.author or user.is_staff or _can_review(user)
-        ):
+        if _can_edit(user, article) or _can_review(user):
             return article
 
         raise Http404("記事が見つかりません。")
@@ -232,8 +203,11 @@ class ArticleCreateView(
         return response
 
     def get_context_data(self, **kwargs):
+        from .blocks import block_editor_catalog
+
         context = super().get_context_data(**kwargs)
         context["form_title"] = "記事を作成"
+        context["block_editor_catalog"] = block_editor_catalog()
         return context
 
 
@@ -270,9 +244,12 @@ class ArticleUpdateView(
         return response
 
     def get_context_data(self, **kwargs):
+        from .blocks import block_editor_catalog
+
         context = super().get_context_data(**kwargs)
         context["form_title"] = "記事を編集"
         context["revision_count"] = self.object.revisions.count()
+        context["block_editor_catalog"] = block_editor_catalog()
         return context
 
 
@@ -340,10 +317,17 @@ class ArticleSubmitReviewView(ArticleWorkflowView):
 class ArticleApproveView(ArticleWorkflowView):
     """レビュー待ちの記事を承認して公開する（編集者の操作）。"""
 
+    @transaction.atomic
     def post(self, request, slug):
-        article = self.get_article()
-        if not _can_review(request.user):
-            raise PermissionDenied("記事を承認する権限がありません。")
+        article = get_object_or_404(
+            Article.objects.select_for_update(), slug=self.kwargs["slug"]
+        )
+        if not (
+            _can_edit(request.user, article)
+            and _can_review(request.user)
+            and _can_publish(request.user)
+        ):
+            raise PermissionDenied("記事を承認・公開する権限がありません。")
         if article.status != Article.Status.REVIEW:
             messages.error(request, "レビュー待ちの記事だけが承認できます。")
             return self.redirect_to_article(article)
@@ -351,6 +335,19 @@ class ArticleApproveView(ArticleWorkflowView):
         # 自分の記事を自分で承認できてしまうと、承認フローの意味が無くなる。
         if article.author_id == request.user.pk and not request.user.is_superuser:
             messages.error(request, "自分の記事は自分で承認できません。")
+            return self.redirect_to_article(article)
+
+        try:
+            reviewed_version = int(request.POST.get("version", ""))
+        except (TypeError, ValueError):
+            messages.error(request, "確認した記事の版を特定できないため承認を中止しました。")
+            return self.redirect_to_article(article)
+        if reviewed_version != article.version:
+            messages.error(
+                request,
+                "確認後に記事が更新されたため承認を中止しました。"
+                "本文をもう一度確認してください。",
+            )
             return self.redirect_to_article(article)
 
         article.status = Article.Status.PUBLISHED
@@ -380,7 +377,7 @@ class ArticleRejectView(ArticleWorkflowView):
 
     def post(self, request, slug):
         article = self.get_article()
-        if not _can_review(request.user):
+        if not (_can_edit(request.user, article) and _can_review(request.user)):
             raise PermissionDenied("記事を差し戻す権限がありません。")
         if article.status != Article.Status.REVIEW:
             messages.error(request, "レビュー待ちの記事だけが差し戻せます。")
@@ -427,8 +424,18 @@ class ArticleRevisionRestoreView(ArticleWorkflowView):
         if not _can_edit(request.user, article):
             raise PermissionDenied("この記事を編集する権限がありません。")
 
-        revision = get_object_or_404(ArticleRevision, pk=pk, article=article)
         with transaction.atomic():
+            article = get_object_or_404(
+                Article.objects.select_for_update(), pk=article.pk
+            )
+            if article.status == Article.Status.PUBLISHED:
+                messages.error(
+                    request,
+                    "公開中の記事へ直接復元はできません。"
+                    "先に編集画面で下書きまたはレビュー待ちへ戻してください。",
+                )
+                return self.redirect_to_article(article)
+            revision = get_object_or_404(ArticleRevision, pk=pk, article=article)
             revision.restore_to_article(restored_by=request.user)
             record(
                 AuditLog.Action.RESTORE,
