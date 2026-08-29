@@ -114,9 +114,6 @@ HTML コメントなので GitHub 上では表示されません。
 
 ### 下書き
 
-- [Django CMSの公開記事が無権限で書き換えられた――認可を「画面」ではなく「状態遷移」で直す](security-remediation-2026-08-29.md)
-  （status: draft）
-
 ### 第1部：CMS を作る
 
 | 日 | 記事 | タグ |
