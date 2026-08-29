@@ -19,7 +19,11 @@ class SupplyChainPinningTests(SimpleTestCase):
             2,
         )
         self.assertIn("COPY requirements.lock .", dockerfile)
-        self.assertEqual(dockerfile.count("--require-hashes"), 2)
+        self.assertEqual(dockerfile.count("--require-hashes"), 4)
+        self.assertIn("COPY plugin-requirements.lock .", dockerfile)
+        self.assertIn("COPY plugin_wheels /plugin-wheels", dockerfile)
+        self.assertIn("--no-index --find-links=/plugin-wheels", dockerfile)
+        self.assertGreaterEqual(dockerfile.count("--no-deps"), 2)
         self.assertIn("--only-binary=:all:", dockerfile)
         self.assertNotIn("apt-get", dockerfile)
 

@@ -203,8 +203,11 @@ class ArticleCreateView(
         return response
 
     def get_context_data(self, **kwargs):
+        from .blocks import block_editor_catalog
+
         context = super().get_context_data(**kwargs)
         context["form_title"] = "記事を作成"
+        context["block_editor_catalog"] = block_editor_catalog()
         return context
 
 
@@ -241,9 +244,12 @@ class ArticleUpdateView(
         return response
 
     def get_context_data(self, **kwargs):
+        from .blocks import block_editor_catalog
+
         context = super().get_context_data(**kwargs)
         context["form_title"] = "記事を編集"
         context["revision_count"] = self.object.revisions.count()
+        context["block_editor_catalog"] = block_editor_catalog()
         return context
 
 

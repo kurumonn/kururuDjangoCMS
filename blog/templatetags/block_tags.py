@@ -59,6 +59,17 @@ def render_blocks(context, blocks, _depth: int = 0):
             continue
 
         template_name = TEMPLATES.get(block_type)
+        plugin_context = {}
+        if template_name is None:
+            from cms_plugins.models import is_plugin_enabled
+            from cms_plugins.registry import plugin_block
+
+            registered = plugin_block(block_type)
+            if registered and is_plugin_enabled(registered[0]):
+                plugin = registered[1]
+                template_name = plugin.template_name
+                if plugin.context_provider:
+                    plugin_context = plugin.context_provider(context.get("request"), data)
         if template_name is None:
             # 未知の種類は黙って捨てる。ここまで来るのは、
             # 保存後にブロック種別を削除した場合など。
@@ -75,6 +86,7 @@ def render_blocks(context, blocks, _depth: int = 0):
                         for i in data.get("article_ids", [])
                         if i in article_map
                     ],
+                    **plugin_context,
                 },
                 request=context.get("request"),
             )

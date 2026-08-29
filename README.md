@@ -96,6 +96,10 @@ python manage.py runserver
 
 `manage.py` は `config.settings.local`（開発用）を既定にしています。
 
+外部プラグインの作成、wheel固定、管理画面での有効化は
+[プラグイン開発・導入ガイド](docs/plugins.md)を参照してください。
+プラグイン実装コードはこのリポジトリへ置きません。
+
 ## 本番相当の構成で動かす（10日目以降）
 
 PostgreSQL・Redis・Nginx・Gunicorn を一式立ち上げます。Nginx は80番を

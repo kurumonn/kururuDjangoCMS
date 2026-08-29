@@ -37,6 +37,7 @@ class BlockType:
     name: str
     label: str
     validate: Callable[[dict], dict]
+    editor_fields: tuple[dict, ...] = ()
 
 
 def _text(data: dict, key: str = "text", *, required: bool = True) -> str:
@@ -145,18 +146,72 @@ def _validate_reusable(data: dict) -> dict:
 BLOCK_TYPES: dict[str, BlockType] = {
     b.name: b
     for b in [
-        BlockType("heading", "見出し", _validate_heading),
-        BlockType("paragraph", "段落", _validate_paragraph),
-        BlockType("image", "画像", _validate_image),
-        BlockType("code", "コード", _validate_code),
-        BlockType("quote", "引用", _validate_quote),
+        BlockType("heading", "見出し", _validate_heading, (
+            {"key": "level", "type": "select", "label": "レベル", "options": [2, 3, 4], "value": 2},
+            {"key": "text", "type": "text", "label": "テキスト"},
+        )),
+        BlockType("paragraph", "段落", _validate_paragraph, (
+            {"key": "text", "type": "textarea", "label": "本文"},
+        )),
+        BlockType("image", "画像", _validate_image, (
+            {"key": "media_id", "type": "number", "label": "メディアID"},
+            {"key": "alt", "type": "text", "label": "代替テキスト"},
+            {"key": "caption", "type": "text", "label": "キャプション"},
+        )),
+        BlockType("code", "コード", _validate_code, (
+            {"key": "language", "type": "text", "label": "言語（python など）"},
+            {"key": "code", "type": "textarea", "label": "コード"},
+        )),
+        BlockType("quote", "引用", _validate_quote, (
+            {"key": "text", "type": "textarea", "label": "引用文"},
+            {"key": "cite", "type": "text", "label": "出典"},
+        )),
         BlockType("table", "表", _validate_table),
-        BlockType("note", "注意書き", _validate_note),
-        BlockType("cta", "行動喚起", _validate_cta),
+        BlockType("note", "注意書き", _validate_note, (
+            {"key": "variant", "type": "select", "label": "種類", "options": ["info", "warning", "danger"], "value": "info"},
+            {"key": "text", "type": "textarea", "label": "本文"},
+        )),
+        BlockType("cta", "行動喚起", _validate_cta, (
+            {"key": "text", "type": "text", "label": "ボタンの文言"},
+            {"key": "url", "type": "text", "label": "リンク先（https:// か / で始める）"},
+        )),
         BlockType("related", "関連記事", _validate_related),
         BlockType("reusable", "再利用ブロック", _validate_reusable),
     ]
 }
+
+
+def get_block_type(name: str) -> BlockType | None:
+    builtin = BLOCK_TYPES.get(name)
+    if builtin is not None:
+        return builtin
+    from cms_plugins.registry import plugin_block
+
+    registered = plugin_block(name)
+    if registered is None:
+        return None
+    _plugin_key, block = registered
+    return BlockType(block.name, block.label, block.validate)
+
+
+def block_editor_catalog() -> dict[str, dict]:
+    catalog = {
+        item.name: {"label": item.label, "fields": list(item.editor_fields)}
+        for item in BLOCK_TYPES.values()
+        if item.editor_fields
+    }
+    from cms_plugins.models import is_plugin_enabled
+    from cms_plugins.registry import definitions
+
+    for plugin in definitions():
+        if not is_plugin_enabled(plugin.key):
+            continue
+        for block in plugin.blocks:
+            catalog[block.name] = {
+                "label": block.label,
+                "fields": [field.as_dict() for field in block.editor_fields],
+            }
+    return catalog
 
 
 def validate_blocks(value: Any) -> list[dict]:
@@ -178,7 +233,7 @@ def validate_blocks(value: Any) -> list[dict]:
             raise ValidationError(f"{index} 番目のブロックが不正です。")
 
         block_type = block.get("type")
-        spec = BLOCK_TYPES.get(block_type)
+        spec = get_block_type(block_type)
         if spec is None:
             raise ValidationError(f"{index} 番目: 未知のブロック種別「{block_type}」です。")
 
@@ -216,4 +271,10 @@ def blocks_to_plain_text(blocks: list[dict]) -> str:
         elif block_type == "table":
             for row in data.get("rows", []):
                 parts.extend(row)
+        else:
+            from cms_plugins.registry import plugin_block
+
+            registered = plugin_block(block_type)
+            if registered and registered[1].plain_text_provider:
+                parts.append(registered[1].plain_text_provider(data))
     return "\n".join(p for p in parts if p)

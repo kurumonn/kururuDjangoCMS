@@ -35,6 +35,14 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
 
 
+# プラグインコードはデプロイ時にインストールし、entry point名を明記する。
+# 管理画面からpip/GitHubを実行する機能は持たせない。
+KURURU_PLUGIN_PACKAGES = env_list("KURURU_PLUGIN_PACKAGES")
+from cms_plugins.discovery import discover_plugin_apps  # noqa: E402
+
+KURURU_PLUGIN_APPS = discover_plugin_apps(KURURU_PLUGIN_PACKAGES)
+
+
 # 管理画面のURLパス。既定の "admin" のままだと総当たり攻撃の的になるため、
 # 本番では環境変数で推測しにくい値へ変更する。
 # ただしこれは「発見されにくくする」対策であって、認証の代わりにはならない。
@@ -70,6 +78,7 @@ INSTALLED_APPS = [
     "allauth.mfa",
     # 自作アプリ
     "core",
+    "cms_plugins.apps.CmsPluginsConfig",
     "accounts",
     "blog",
     "pages",
@@ -77,7 +86,7 @@ INSTALLED_APPS = [
     "comments",
     "seo",
     "dashboard",
-]
+] + KURURU_PLUGIN_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

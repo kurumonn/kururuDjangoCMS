@@ -39,3 +39,7 @@ Thumbs.db
 
 # バックアップの実ファイル（10日目）
 /backups/
+
+# 外部プラグインwheelはビルド入力であり、CMS本体へコミットしない。
+/plugin_wheels/*
+!/plugin_wheels/.gitkeep

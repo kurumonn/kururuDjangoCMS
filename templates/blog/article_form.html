@@ -38,15 +38,8 @@
                  {% endif %}
                  data-version="{{ object.version }}"
                {% endif %}>
-            <div class="editor__toolbar">
-              <button type="button" class="btn" data-add-block="heading">見出し</button>
-              <button type="button" class="btn" data-add-block="paragraph">段落</button>
-              <button type="button" class="btn" data-add-block="image">画像</button>
-              <button type="button" class="btn" data-add-block="code">コード</button>
-              <button type="button" class="btn" data-add-block="quote">引用</button>
-              <button type="button" class="btn" data-add-block="note">注意書き</button>
-              <button type="button" class="btn" data-add-block="cta">行動喚起</button>
-            </div>
+            {{ block_editor_catalog|json_script:"block-editor-types" }}
+            <div class="editor__toolbar"></div>
             <div class="editor__blocks"></div>
             <p class="editor__status" role="status" aria-live="polite"></p>
           </div>
