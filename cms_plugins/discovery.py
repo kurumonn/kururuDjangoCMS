@@ -5,8 +5,11 @@ from __future__ import annotations
 import re
 from importlib import metadata
 
+from django.apps import AppConfig
+
 ENTRY_POINT_GROUP = "kururucms.plugins"
-_DOTTED_PATH = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
+_DOTTED_MODULE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
+_ATTRIBUTE = re.compile(r"^[A-Za-z_]\w*$")
 
 
 def discover_plugin_apps(allowed_names: list[str]) -> list[str]:
@@ -29,8 +32,21 @@ def discover_plugin_apps(allowed_names: list[str]) -> list[str]:
 
     apps = []
     for name in allowed_names:
-        value = by_name[name].value
-        if "[" in value or ":" in value or not _DOTTED_PATH.fullmatch(value):
-            raise RuntimeError(f"{name}: entry pointはDjango AppConfigの完全修飾名で指定してください")
-        apps.append(value)
+        entry = by_name[name]
+        if (
+            entry.extras
+            or not entry.attr
+            or not _DOTTED_MODULE.fullmatch(entry.module)
+            or not _ATTRIBUTE.fullmatch(entry.attr)
+        ):
+            raise RuntimeError(
+                f"{name}: entry pointは module:AppConfigClass 形式で指定してください"
+            )
+        try:
+            app_config = entry.load()
+        except (AttributeError, ImportError, ModuleNotFoundError) as exc:
+            raise RuntimeError(f"{name}: AppConfigを読み込めません") from exc
+        if not isinstance(app_config, type) or not issubclass(app_config, AppConfig):
+            raise RuntimeError(f"{name}: entry pointはDjango AppConfigクラスを指してください")
+        apps.append(f"{entry.module}.{entry.attr}")
     return apps

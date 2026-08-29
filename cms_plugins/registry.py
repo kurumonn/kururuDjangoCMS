@@ -53,12 +53,14 @@ class PluginDefinition:
     api_version: int = CMS_PLUGIN_API_VERSION
     urlconf: str = ""
     url_prefix: str = ""
+    management_url_name: str = ""
 
 
 _definitions: dict[str, PluginDefinition] = {}
 _blocks: dict[str, tuple[str, PluginBlock]] = {}
 _PLUGIN_KEY = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _URL_PREFIX = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_URL_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,79}$")
 
 
 def register_plugin(definition: PluginDefinition) -> None:
@@ -72,6 +74,15 @@ def register_plugin(definition: PluginDefinition) -> None:
         raise ImproperlyConfigured(
             f"{definition.key}: URL prefix must be a non-empty lowercase path segment"
         )
+    if definition.management_url_name:
+        if not definition.urlconf:
+            raise ImproperlyConfigured(
+                f"{definition.key}: management URL requires a plugin URLconf"
+            )
+        if not _URL_NAME.fullmatch(definition.management_url_name):
+            raise ImproperlyConfigured(
+                f"{definition.key}: management URL name is invalid"
+            )
     for block in definition.blocks:
         if not block.name.startswith(definition.key + "."):
             raise ImproperlyConfigured(

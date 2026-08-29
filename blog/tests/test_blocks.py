@@ -1,15 +1,28 @@
 """7日目: ブロックの検証と描画のテスト。"""
 
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from blog.blocks import MAX_BLOCKS, blocks_to_plain_text, validate_blocks
 from blog.models import Article, ReusableBlock
+from cms_plugins.models import PluginActivation
+from cms_plugins.registry import (
+    PluginBlock,
+    PluginDefinition,
+    clear_registry,
+    register_plugin,
+)
 
 from .factories import create_article, create_category
 
 
 class ValidateBlocksTests(TestCase):
+    def tearDown(self):
+        clear_registry()
+        super().tearDown()
+
     def test_empty_is_allowed(self):
         self.assertEqual(validate_blocks(None), [])
         self.assertEqual(validate_blocks([]), [])
@@ -111,6 +124,60 @@ class ValidateBlocksTests(TestCase):
                 ]
             )
         self.assertIn("2 番目", str(ctx.exception))
+
+    def test_disabled_plugin_block_is_rejected(self):
+        register_plugin(
+            PluginDefinition(
+                "sample",
+                "Sample",
+                "1",
+                "",
+                blocks=(
+                    PluginBlock(
+                        "sample.link",
+                        "Link",
+                        lambda data: {"url": "/safe"},
+                        "blog/blocks/cta.html",
+                        (),
+                    ),
+                ),
+            )
+        )
+        PluginActivation.objects.create(key="sample", enabled=False)
+
+        with self.assertRaises(ValidationError):
+            validate_blocks(
+                [{"type": "sample.link", "data": {"url": "javascript:alert(1)"}}]
+            )
+
+    def test_enabled_plugin_block_uses_normalized_validator_result(self):
+        register_plugin(
+            PluginDefinition(
+                "sample",
+                "Sample",
+                "1",
+                "",
+                blocks=(
+                    PluginBlock(
+                        "sample.link",
+                        "Link",
+                        lambda data: {"url": "/safe"},
+                        "blog/blocks/cta.html",
+                        (),
+                    ),
+                ),
+            )
+        )
+        PluginActivation.objects.create(key="sample", enabled=True)
+
+        article = create_article(title="plugin", category=create_category(name="plugin"))
+        article.blocks = [
+            {"type": "sample.link", "data": {"url": "javascript:alert(1)"}}
+        ]
+        article.save()
+        article.refresh_from_db()
+
+        self.assertEqual(article.blocks[0]["data"], {"url": "/safe"})
 
 
 class BlocksToPlainTextTests(TestCase):
@@ -250,3 +317,40 @@ class BlockRenderingTests(TestCase):
         )
         self.assertIn("関連の公開記事", html)
         self.assertNotIn("関連の下書き", html)
+
+    def test_plugin_activation_lookup_is_constant_per_render(self):
+        register_plugin(
+            PluginDefinition(
+                "sample",
+                "Sample",
+                "1",
+                "",
+                blocks=(
+                    PluginBlock(
+                        "sample.note",
+                        "Note",
+                        lambda data: {"variant": "info", "text": "safe"},
+                        "blog/blocks/note.html",
+                        (),
+                    ),
+                ),
+            )
+        )
+        self.addCleanup(clear_registry)
+        PluginActivation.objects.create(key="sample", enabled=True)
+        article = create_article(title="query", category=self.category)
+        article.blocks = [
+            {"type": "sample.note", "data": {"text": "safe"}} for _ in range(300)
+        ]
+        article.save()
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(article.get_absolute_url())
+
+        self.assertEqual(response.status_code, 200)
+        activation_queries = [
+            query
+            for query in queries
+            if "cms_plugins_pluginactivation" in query["sql"].lower()
+        ]
+        self.assertEqual(len(activation_queries), 1)

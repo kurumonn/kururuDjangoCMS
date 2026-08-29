@@ -29,3 +29,29 @@ class RegistryTests(SimpleTestCase):
             register_plugin(
                 PluginDefinition("sample", "Sample", "1", "", blocks=(block,))
             )
+
+    def test_management_url_requires_urlconf(self):
+        with self.assertRaises(ImproperlyConfigured):
+            register_plugin(
+                PluginDefinition(
+                    "sample",
+                    "Sample",
+                    "1",
+                    "",
+                    management_url_name="dashboard",
+                )
+            )
+
+    def test_management_url_name_is_validated(self):
+        with self.assertRaises(ImproperlyConfigured):
+            register_plugin(
+                PluginDefinition(
+                    "sample",
+                    "Sample",
+                    "1",
+                    "",
+                    urlconf="sample.urls",
+                    url_prefix="sample",
+                    management_url_name="https://evil.example/",
+                )
+            )

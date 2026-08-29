@@ -227,6 +227,18 @@ def validate_blocks(value: Any) -> list[dict]:
     if len(value) > MAX_BLOCKS:
         raise ValidationError(f"ブロック数が多すぎます（上限 {MAX_BLOCKS}）。")
 
+    from cms_plugins.models import enabled_plugin_keys
+    from cms_plugins.registry import plugin_block
+
+    registered_blocks = {
+        block.get("type"): plugin_block(block.get("type"))
+        for block in value
+        if isinstance(block, dict) and block.get("type") not in BLOCK_TYPES
+    }
+    enabled_keys = enabled_plugin_keys(
+        registered[0] for registered in registered_blocks.values() if registered
+    )
+
     normalized: list[dict] = []
     for index, block in enumerate(value, start=1):
         if not isinstance(block, dict):
@@ -236,6 +248,11 @@ def validate_blocks(value: Any) -> list[dict]:
         spec = get_block_type(block_type)
         if spec is None:
             raise ValidationError(f"{index} 番目: 未知のブロック種別「{block_type}」です。")
+        registered = registered_blocks.get(block_type)
+        if registered and registered[0] not in enabled_keys:
+            raise ValidationError(
+                f"{index} 番目: 無効なプラグインのブロック「{block_type}」は保存できません。"
+            )
 
         data = block.get("data")
         if not isinstance(data, dict):

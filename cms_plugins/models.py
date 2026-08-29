@@ -16,9 +16,21 @@ class PluginActivation(models.Model):
 
 
 def is_plugin_enabled(key: str) -> bool:
+    return key in enabled_plugin_keys({key})
+
+
+def enabled_plugin_keys(keys) -> set[str]:
+    """有効状態を一括取得し、ブロック数に比例するDB問い合わせを避ける。"""
     from django.db import OperationalError, ProgrammingError
 
+    keys = {key for key in keys if key}
+    if not keys:
+        return set()
     try:
-        return PluginActivation.objects.filter(key=key, enabled=True).exists()
+        return set(
+            PluginActivation.objects.filter(key__in=keys, enabled=True).values_list(
+                "key", flat=True
+            )
+        )
     except (OperationalError, ProgrammingError):
-        return False
+        return set()

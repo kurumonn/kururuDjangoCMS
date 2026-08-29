@@ -47,6 +47,18 @@ def render_blocks(context, blocks, _depth: int = 0):
     article_map = _load_articles(blocks)
     reusable_map = _load_reusables(blocks) if _depth < MAX_REUSABLE_DEPTH else {}
 
+    from cms_plugins.models import enabled_plugin_keys
+    from cms_plugins.registry import plugin_block
+
+    registered_blocks = {
+        block.get("type"): plugin_block(block.get("type"))
+        for block in blocks
+        if block.get("type") not in TEMPLATES and block.get("type") != "reusable"
+    }
+    enabled_keys = enabled_plugin_keys(
+        registered[0] for registered in registered_blocks.values() if registered
+    )
+
     parts: list[str] = []
     for block in blocks:
         block_type = block.get("type")
@@ -61,11 +73,8 @@ def render_blocks(context, blocks, _depth: int = 0):
         template_name = TEMPLATES.get(block_type)
         plugin_context = {}
         if template_name is None:
-            from cms_plugins.models import is_plugin_enabled
-            from cms_plugins.registry import plugin_block
-
-            registered = plugin_block(block_type)
-            if registered and is_plugin_enabled(registered[0]):
+            registered = registered_blocks.get(block_type)
+            if registered and registered[0] in enabled_keys:
                 plugin = registered[1]
                 template_name = plugin.template_name
                 if plugin.context_provider:
@@ -95,7 +104,8 @@ def render_blocks(context, blocks, _depth: int = 0):
     from django.utils.safestring import mark_safe
 
     # 各テンプレートの出力はエスケープ済み。連結だけを安全とみなす。
-    return mark_safe("".join(parts))
+    # render_to_string済みの断片だけを連結する。ユーザー値を直接連結しない。
+    return mark_safe("".join(parts))  # nosec B308 B703
 
 
 def _load_media(blocks) -> dict:
