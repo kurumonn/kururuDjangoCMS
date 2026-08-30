@@ -107,8 +107,14 @@ async def handle_http(
 
 
 async def main() -> None:
-    smtp = await asyncio.start_server(handle_smtp, "0.0.0.0", 1025)
-    http = await asyncio.start_server(handle_http, "0.0.0.0", 8025)
+    # The container publishes no host ports. Binding its interfaces is required
+    # so only the worker and Playwright peers on the Compose networks can reach it.
+    smtp = await asyncio.start_server(
+        handle_smtp, "0.0.0.0", 1025  # nosec B104
+    )
+    http = await asyncio.start_server(
+        handle_http, "0.0.0.0", 8025  # nosec B104
+    )
     async with smtp, http:
         await asyncio.gather(smtp.serve_forever(), http.serve_forever())
 
