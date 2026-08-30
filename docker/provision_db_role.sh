@@ -21,8 +21,9 @@ if [ "$POSTGRES_MIGRATION_USER" = "$POSTGRES_USER" ] \
 fi
 
 export PGPASSWORD="$POSTGRES_PASSWORD"
+postgres_host="${POSTGRES_HOST:-db}"
 
-psql -v ON_ERROR_STOP=1 --host=db --username="$POSTGRES_USER" --dbname=postgres <<'SQL'
+psql -v ON_ERROR_STOP=1 --host="$postgres_host" --username="$POSTGRES_USER" --dbname=postgres <<'SQL'
 \getenv app_db POSTGRES_DB
 \getenv migration_user POSTGRES_MIGRATION_USER
 \getenv migration_password POSTGRES_MIGRATION_PASSWORD
@@ -73,7 +74,7 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'app_db', :'app_user')
 \gexec
 SQL
 
-psql -v ON_ERROR_STOP=1 --host=db --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" <<'SQL'
+psql -v ON_ERROR_STOP=1 --host="$postgres_host" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" <<'SQL'
 \getenv migration_user POSTGRES_MIGRATION_USER
 \getenv app_user POSTGRES_APP_USER
 
@@ -129,7 +130,7 @@ SELECT format(
 SQL
 
 attributes="$(
-    psql -v ON_ERROR_STOP=1 --host=db --username="$POSTGRES_USER" --dbname=postgres --tuples-only --no-align <<'SQL'
+    psql -v ON_ERROR_STOP=1 --host="$postgres_host" --username="$POSTGRES_USER" --dbname=postgres --tuples-only --no-align <<'SQL'
 \getenv migration_user POSTGRES_MIGRATION_USER
 \getenv app_user POSTGRES_APP_USER
 SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls,

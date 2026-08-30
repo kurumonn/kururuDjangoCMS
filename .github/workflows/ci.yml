@@ -16,6 +16,20 @@ jobs:
   test-and-audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        env:
+          POSTGRES_DB: kururucms_role_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-only-admin-password  # pragma: allowlist secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kururucms_role_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -33,6 +47,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip==25.3
           python -m pip install --require-hashes -r requirements.lock -r requirements-ci.lock
+
+      - name: Verify PostgreSQL role boundaries
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_DB: kururucms_role_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-only-admin-password  # pragma: allowlist secret
+          POSTGRES_MIGRATION_USER: kururucms_migrator
+          POSTGRES_MIGRATION_PASSWORD: test-only-migration-password  # pragma: allowlist secret
+          POSTGRES_APP_USER: kururucms_app
+          POSTGRES_APP_PASSWORD: test-only-app-password  # pragma: allowlist secret
+        run: |
+          sh docker/provision_db_role.sh
+          sh scripts/verify_db_role_boundary.sh
 
       - name: Run tests and migration drift checks
         run: |

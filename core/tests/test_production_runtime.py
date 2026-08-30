@@ -89,6 +89,12 @@ class ProductionRuntimeContractTests(SimpleTestCase):
         self.assertIn("REVOKE CREATE ON SCHEMA public FROM PUBLIC", provision)
         self.assertIn("GRANT SELECT, INSERT, UPDATE, DELETE", provision)
         self.assertIn("ALTER DEFAULT PRIVILEGES", provision)
+        role_test = (ROOT / "scripts" / "verify_db_role_boundary.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CREATE TABLE role_boundary_probe", role_test)
+        self.assertIn("INSERT INTO role_boundary_probe", role_test)
+        self.assertIn("application role unexpectedly created a table", role_test)
         self.assertIn("condition: service_completed_successfully", role_job + compose)
 
     def test_contact_forms_background_services_are_opt_in_and_monitored(self):
