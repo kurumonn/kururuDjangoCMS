@@ -1,64 +1,62 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const articlePath = "/articles/e2e-contact-form/";
 const adminPath = "/admin/contact_forms/contactform/";
 
-test("@authorization view-only staff cannot archive or duplicate forms", async ({
+async function loginViewOnlyStaff(page: Page) {
+  await page.goto(adminPath);
+  await page.waitForURL(/\/accounts\/login\//);
+  await page
+    .locator('input[name="login"]')
+    .fill(process.env.E2E_VIEWER_EMAIL || "");
+  await page
+    .locator('input[name="password"]')
+    .fill(process.env.E2E_VIEWER_PASSWORD || "");
+  await page.getByRole("button", { name: /ログイン|Sign In/i }).click();
+  await page.waitForURL(new RegExp(`${adminPath.replaceAll("/", "\\/")}`));
+}
+
+test("@authorization-login view-only staff enters through allauth", async ({
   page,
-}, testInfo) => {
-  let checkpoint = "navigate-admin";
-  const mark = (next: string) => {
-    checkpoint = next;
-    testInfo.annotations.push({ type: "checkpoint", description: next });
-  };
-  mark(checkpoint);
-  try {
-    await page.goto(`${adminPath}`);
-    mark("wait-login");
-    await page.waitForURL(/\/accounts\/login\//);
-    await page
-      .locator('input[name="login"]')
-      .fill(process.env.E2E_VIEWER_EMAIL || "");
-    await page
-      .locator('input[name="password"]')
-      .fill(process.env.E2E_VIEWER_PASSWORD || "");
-    mark("submit-login");
-    await page.getByRole("button", { name: /ログイン|Sign In/i }).click();
-    await page.waitForURL(new RegExp(`${adminPath.replaceAll("/", "\\/")}`));
+}) => {
+  await loginViewOnlyStaff(page);
+  await expect(page).toHaveURL(new RegExp(`${adminPath.replaceAll("/", "\\/")}`));
+});
 
-    mark("actions-hidden");
-    const actions = page.locator('select[name="action"]');
-    await expect(actions.locator('option[value="duplicate_forms"]')).toHaveCount(0);
-    await expect(actions.locator('option[value="archive_forms"]')).toHaveCount(0);
+test("@authorization-actions destructive actions are hidden", async ({ page }) => {
+  await loginViewOnlyStaff(page);
+  const actions = page.locator('select[name="action"]');
+  await expect(actions.locator('option[value="duplicate_forms"]')).toHaveCount(0);
+  await expect(actions.locator('option[value="archive_forms"]')).toHaveCount(0);
+});
 
-    mark("forged-post");
-    const csrf = await page
-      .locator('input[name="csrfmiddlewaretoken"]')
-      .first()
-      .inputValue();
-    const row = page.locator('input[name="_selected_action"]').first();
-    const formId = await row.inputValue();
-    const forged = await page.context().request.post(adminPath, {
-      maxRedirects: 0,
-      headers: {
-        origin: process.env.E2E_BASE_URL || "https://e2e.local",
-        referer: `${process.env.E2E_BASE_URL || "https://e2e.local"}${adminPath}`,
-      },
-      form: {
-        csrfmiddlewaretoken: csrf,
-        action: "archive_forms",
-        _selected_action: formId,
-        index: "0",
-      },
-    });
-    expect([200, 302, 403]).toContain(forged.status());
+test("@authorization-forged forged archive post cannot mutate the form", async ({
+  page,
+}) => {
+  await loginViewOnlyStaff(page);
+  const csrf = await page
+    .locator('input[name="csrfmiddlewaretoken"]')
+    .first()
+    .inputValue();
+  const row = page.locator('input[name="_selected_action"]').first();
+  const formId = await row.inputValue();
+  const forged = await page.context().request.post(adminPath, {
+    maxRedirects: 0,
+    headers: {
+      origin: process.env.E2E_BASE_URL || "https://e2e.local",
+      referer: `${process.env.E2E_BASE_URL || "https://e2e.local"}${adminPath}`,
+    },
+    form: {
+      csrfmiddlewaretoken: csrf,
+      action: "archive_forms",
+      _selected_action: formId,
+      index: "0",
+    },
+  });
+  expect([200, 302, 403]).toContain(forged.status());
 
-    mark("form-still-visible");
-    await page.reload();
-    await expect(page.getByRole("link", { name: "E2Eお問い合わせ" })).toBeVisible();
-  } catch (error) {
-    throw error;
-  }
+  await page.reload();
+  await expect(page.getByRole("link", { name: "E2Eお問い合わせ" })).toBeVisible();
 });
 
 test("@enqueue duplicate public POST creates one durable outbox and no synchronous mail", async ({

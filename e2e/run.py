@@ -189,23 +189,28 @@ def main() -> int:
         sys.stderr.write(startup.stderr)
         phase = "seed"
         django_script("/e2e/seed.py")
-        phase = "browser-authorization"
-        authorization = run(
-            "run",
-            "--rm",
-            "playwright",
-            "--reporter=json",
-            "--grep",
-            "@authorization",
-            check=False,
-            capture=True,
-        )
-        if authorization.returncode:
-            diagnostic = playwright_diagnostic(authorization)
-            raise subprocess.CalledProcessError(
-                authorization.returncode, authorization.args
+        for tag, label in (
+            ("@authorization-login", "login"),
+            ("@authorization-actions", "actions"),
+            ("@authorization-forged", "forged"),
+        ):
+            phase = f"browser-authorization-{label}"
+            authorization = run(
+                "run",
+                "--rm",
+                "playwright",
+                "--reporter=json",
+                "--grep",
+                tag,
+                check=False,
+                capture=True,
             )
-        print("playwright_phase=authorization passed=1")
+            if authorization.returncode:
+                diagnostic = playwright_diagnostic(authorization)
+                raise subprocess.CalledProcessError(
+                    authorization.returncode, authorization.args
+                )
+            print(f"playwright_phase=authorization-{label} passed=1")
         phase = "browser-enqueue"
         enqueue = run(
             "run",
