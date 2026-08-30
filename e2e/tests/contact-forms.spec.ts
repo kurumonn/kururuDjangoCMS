@@ -38,8 +38,11 @@ test("@authorization-forged forged archive post cannot mutate the form", async (
     .locator('input[name="csrfmiddlewaretoken"]')
     .first()
     .inputValue();
-  const row = page.locator('input[name="_selected_action"]').first();
-  const formId = await row.inputValue();
+  const formHref = await page
+    .getByRole("link", { name: "E2Eお問い合わせ" })
+    .getAttribute("href");
+  const formId = formHref?.match(/\/(\d+)\/change\/?$/)?.[1];
+  expect(formId).toBeTruthy();
   const forged = await page.context().request.post(adminPath, {
     maxRedirects: 0,
     headers: {
@@ -49,7 +52,7 @@ test("@authorization-forged forged archive post cannot mutate the form", async (
     form: {
       csrfmiddlewaretoken: csrf,
       action: "archive_forms",
-      _selected_action: formId,
+      _selected_action: formId || "",
       index: "0",
     },
   });
