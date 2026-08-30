@@ -31,12 +31,8 @@ media/
 backups/
 *.log
 
-# E2Eの一時checkout・依存・資格情報はCMSイメージのbuild contextへ送らない
-e2e/node_modules/
-e2e/plugin-src/
-e2e/runtime/
-e2e/test-results/
-e2e/playwright-report/
+# E2Eコード・一時checkout・資格情報はCMS本番イメージへ一切送らない
+e2e/
 
 # ドキュメントとツール（実行には要らない）
 docs/

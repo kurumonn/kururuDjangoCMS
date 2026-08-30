@@ -47,6 +47,7 @@ RUN pip install --require-hashes --no-index --find-links=/wheels -r requirements
  && rm -rf /wheels
 
 COPY --chown=kururu:kururu . .
+RUN chmod 0555 /app/docker/entrypoint.sh
 RUN rm -rf /app/plugin_wheels
 
 # 静的ファイルとアップロードの置き場。
