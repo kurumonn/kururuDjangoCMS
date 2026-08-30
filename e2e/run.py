@@ -21,6 +21,33 @@ COMPOSE = [
 ]
 
 
+def diagnostic_code(completed: subprocess.CompletedProcess[str]) -> str:
+    output = (completed.stderr or "") + "\n" + (completed.stdout or "")
+    lowered = output.lower()
+    if "no matching manifest" in lowered:
+        return "image-platform"
+    if "failed to solve" in lowered or "dockerfile parse error" in lowered:
+        return "image-build"
+    if "required variable" in lowered or "is not set" in lowered:
+        return "compose-environment"
+    if "no space left on device" in lowered:
+        return "runner-disk-space"
+    if "permission denied" in lowered:
+        return "runner-permission"
+    for service in (
+        "db_role_provision",
+        "smtp_capture",
+        "migrate",
+        "redis",
+        "web",
+        "nginx",
+        "db",
+    ):
+        if service in lowered:
+            return f"service-{service}"
+    return "unclassified"
+
+
 def run(*args: str, check: bool = True, capture: bool = False):
     return subprocess.run(
         [*COMPOSE, *args],
@@ -77,8 +104,22 @@ def main() -> int:
 
     failed = False
     phase = "startup"
+    diagnostic = "not-collected"
     try:
-        run("up", "-d", "--build", "smtp_capture", "nginx")
+        startup = run(
+            "up",
+            "-d",
+            "--build",
+            "smtp_capture",
+            "nginx",
+            check=False,
+            capture=True,
+        )
+        if startup.returncode:
+            diagnostic = diagnostic_code(startup)
+            raise subprocess.CalledProcessError(startup.returncode, startup.args)
+        sys.stdout.write(startup.stdout)
+        sys.stderr.write(startup.stderr)
         phase = "seed"
         django_script("/e2e/seed.py")
         phase = "browser-enqueue"
@@ -108,7 +149,8 @@ def main() -> int:
         if os.environ.get("GITHUB_ACTIONS") == "true":
             print(
                 f"::error title=Docker E2E failed::"
-                f"phase={phase}; error={type(exc).__name__}; returncode={return_code}"
+                f"phase={phase}; error={type(exc).__name__}; returncode={return_code}; "
+                f"diagnostic={diagnostic}"
             )
         raise
     finally:
