@@ -1,0 +1,6 @@
+*
+!package.json
+!package-lock.json
+!playwright.config.ts
+!tests/
+!tests/**
