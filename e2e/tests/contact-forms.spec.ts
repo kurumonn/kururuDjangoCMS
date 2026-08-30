@@ -52,9 +52,13 @@ test("@enqueue duplicate public POST creates one durable outbox and no synchrono
   await form.locator('input[name="email"]').fill("visitor@example.test");
   await form.locator('textarea[name="message"]').fill("Docker Compose E2E送信");
 
-  const requestBody = await form.evaluate((element: HTMLFormElement) =>
-    new URLSearchParams(new FormData(element) as unknown as Record<string, string>).toString(),
-  );
+  const requestBody = await form.evaluate((element: HTMLFormElement) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of new FormData(element).entries()) {
+      params.append(key, String(value));
+    }
+    return params.toString();
+  });
   const action = await form.getAttribute("action");
   expect(action).toBeTruthy();
 
@@ -81,7 +85,9 @@ test("@enqueue duplicate public POST creates one durable outbox and no synchrono
   });
   expect(duplicate.status()).toBe(302);
 
-  const mail = await page.request.get("http://smtp_capture:8025/messages");
+  const mail = await page
+    .context()
+    .request.get("http://smtp_capture:8025/messages");
   expect(mail.ok()).toBeTruthy();
   expect(await mail.json()).toEqual([]);
 });

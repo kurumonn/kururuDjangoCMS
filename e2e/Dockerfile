@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit
 
 COPY playwright.config.ts ./
+COPY tsconfig.json ./
 COPY tests ./tests
 
 USER pwuser

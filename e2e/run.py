@@ -122,14 +122,16 @@ def main() -> int:
         sys.stderr.write(startup.stderr)
         phase = "seed"
         django_script("/e2e/seed.py")
-        phase = "browser-enqueue"
+        phase = "browser-authorization"
         run(
             "run",
             "--rm",
             "playwright",
             "--grep",
-            "@authorization|@enqueue",
+            "@authorization",
         )
+        phase = "browser-enqueue"
+        run("run", "--rm", "playwright", "--grep", "@enqueue")
         phase = "database-enqueued"
         wait_for_state("enqueued")
 
