@@ -76,9 +76,12 @@ def main() -> int:
         raise SystemExit("prepare E2E inputs first: " + ", ".join(missing))
 
     failed = False
+    phase = "startup"
     try:
         run("up", "-d", "--build", "smtp_capture", "nginx")
+        phase = "seed"
         django_script("/e2e/seed.py")
+        phase = "browser-enqueue"
         run(
             "run",
             "--rm",
@@ -86,16 +89,27 @@ def main() -> int:
             "--grep",
             "@authorization|@enqueue",
         )
+        phase = "database-enqueued"
         wait_for_state("enqueued")
 
+        phase = "worker-start"
         run("up", "-d", "contact_forms_worker", "contact_forms_maintenance")
+        phase = "browser-delivery"
         run("run", "--rm", "playwright", "--grep", "@delivery")
+        phase = "database-delivered"
         wait_for_state("delivered")
+        phase = "maintenance"
         wait_for_state("maintenance")
         print("docker_e2e=passed tests=3")
         return 0
-    except (OSError, subprocess.CalledProcessError, RuntimeError):
+    except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
         failed = True
+        return_code = getattr(exc, "returncode", "n/a")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(
+                f"::error title=Docker E2E failed::"
+                f"phase={phase}; error={type(exc).__name__}; returncode={return_code}"
+            )
         raise
     finally:
         if failed:
