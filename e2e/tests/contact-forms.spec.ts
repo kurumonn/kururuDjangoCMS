@@ -21,11 +21,28 @@ async function loginViewOnlyStaff(page: Page) {
   await page.waitForURL(new RegExp(`${adminPath.replaceAll("/", "\\/")}`));
 }
 
-test("@authorization-admin-redirect admin redirects to allauth", async ({
-  page,
+test("@network-health browser reaches nginx over HTTPS", async ({ page }) => {
+  const response = await page.goto("/healthz/");
+  expect(response?.status()).toBe(200);
+});
+
+test("@authorization-admin-gate admin sends unauthenticated users to its login gate", async ({
+  request,
 }) => {
-  await page.goto(adminPath);
-  await page.waitForURL(/\/accounts\/login\//);
+  const response = await request.get(adminPath, { maxRedirects: 0 });
+  expect(response.status()).toBe(302);
+  expect(response.headers().location).toContain("/admin/login/");
+});
+
+test("@authorization-allauth-gate admin login gate delegates to allauth", async ({
+  request,
+}) => {
+  const response = await request.get(
+    `/admin/login/?next=${encodeURIComponent(adminPath)}`,
+    { maxRedirects: 0 },
+  );
+  expect(response.status()).toBe(302);
+  expect(response.headers().location).toContain("/accounts/login/");
 });
 
 test("@authorization-login-form allauth renders the password form", async ({
