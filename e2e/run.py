@@ -48,6 +48,28 @@ def diagnostic_code(completed: subprocess.CompletedProcess[str]) -> str:
     return "unclassified"
 
 
+def playwright_diagnostic(completed: subprocess.CompletedProcess[str]) -> str:
+    output = (completed.stderr or "") + "\n" + (completed.stdout or "")
+    for checkpoint in (
+        "navigate-admin",
+        "wait-login",
+        "submit-login",
+        "actions-hidden",
+        "forged-post",
+        "form-still-visible",
+    ):
+        if f"checkpoint={checkpoint}" in output:
+            return f"checkpoint-{checkpoint}"
+    lowered = output.lower()
+    if "strict mode violation" in lowered:
+        return "selector-strict-mode"
+    if "timeout 30000ms exceeded" in lowered:
+        return "playwright-timeout"
+    if "net::err_" in lowered:
+        return "browser-network"
+    return "playwright-unclassified"
+
+
 def run(*args: str, check: bool = True, capture: bool = False):
     return subprocess.run(
         [*COMPOSE, *args],
@@ -123,22 +145,57 @@ def main() -> int:
         phase = "seed"
         django_script("/e2e/seed.py")
         phase = "browser-authorization"
-        run(
+        authorization = run(
             "run",
             "--rm",
             "playwright",
+            "--reporter=json",
             "--grep",
             "@authorization",
+            check=False,
+            capture=True,
         )
+        if authorization.returncode:
+            diagnostic = playwright_diagnostic(authorization)
+            raise subprocess.CalledProcessError(
+                authorization.returncode, authorization.args
+            )
+        print("playwright_phase=authorization passed=1")
         phase = "browser-enqueue"
-        run("run", "--rm", "playwright", "--grep", "@enqueue")
+        enqueue = run(
+            "run",
+            "--rm",
+            "playwright",
+            "--reporter=json",
+            "--grep",
+            "@enqueue",
+            check=False,
+            capture=True,
+        )
+        if enqueue.returncode:
+            diagnostic = playwright_diagnostic(enqueue)
+            raise subprocess.CalledProcessError(enqueue.returncode, enqueue.args)
+        print("playwright_phase=enqueue passed=1")
         phase = "database-enqueued"
         wait_for_state("enqueued")
 
         phase = "worker-start"
         run("up", "-d", "contact_forms_worker", "contact_forms_maintenance")
         phase = "browser-delivery"
-        run("run", "--rm", "playwright", "--grep", "@delivery")
+        delivery = run(
+            "run",
+            "--rm",
+            "playwright",
+            "--reporter=json",
+            "--grep",
+            "@delivery",
+            check=False,
+            capture=True,
+        )
+        if delivery.returncode:
+            diagnostic = playwright_diagnostic(delivery)
+            raise subprocess.CalledProcessError(delivery.returncode, delivery.args)
+        print("playwright_phase=delivery passed=1")
         phase = "database-delivered"
         wait_for_state("delivered")
         phase = "maintenance"
