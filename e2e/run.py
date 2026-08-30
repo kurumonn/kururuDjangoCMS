@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -60,10 +61,23 @@ def playwright_diagnostic(completed: subprocess.CompletedProcess[str]) -> str:
     ):
         if f"checkpoint={checkpoint}" in output:
             return f"checkpoint-{checkpoint}"
+    line_match = re.search(r"contact-forms\.spec\.ts:(\d+)", output)
+    if line_match:
+        line_number = int(line_match.group(1))
+        for upper_bound, checkpoint in (
+            (11, "navigate-admin"),
+            (19, "wait-login"),
+            (22, "submit-login"),
+            (27, "actions-hidden"),
+            (49, "forged-post"),
+            (60, "form-still-visible"),
+        ):
+            if line_number <= upper_bound:
+                return f"checkpoint-{checkpoint}"
     lowered = output.lower()
     if "strict mode violation" in lowered:
         return "selector-strict-mode"
-    if "timeout 30000ms exceeded" in lowered:
+    if "timeout" in lowered:
         return "playwright-timeout"
     if "net::err_" in lowered:
         return "browser-network"
