@@ -2,10 +2,10 @@ import { expect, test, type Page } from "@playwright/test";
 
 const articlePath = "/articles/e2e-contact-form/";
 const adminPath = "/admin/contact_forms/contactform/";
+const accountLoginPath = `/accounts/login/?next=${encodeURIComponent(adminPath)}`;
 
 async function openLogin(page: Page) {
-  await page.goto(adminPath);
-  await page.waitForURL(/\/accounts\/login\//);
+  await page.goto(accountLoginPath);
   await expect(page.locator('input[name="login"]')).toBeVisible();
   await expect(page.locator('input[name="password"]')).toBeVisible();
 }
@@ -21,7 +21,14 @@ async function loginViewOnlyStaff(page: Page) {
   await page.waitForURL(new RegExp(`${adminPath.replaceAll("/", "\\/")}`));
 }
 
-test("@authorization-login-page admin redirects to the allauth login form", async ({
+test("@authorization-admin-redirect admin redirects to allauth", async ({
+  page,
+}) => {
+  await page.goto(adminPath);
+  await page.waitForURL(/\/accounts\/login\//);
+});
+
+test("@authorization-login-form allauth renders the password form", async ({
   page,
 }) => {
   await openLogin(page);
