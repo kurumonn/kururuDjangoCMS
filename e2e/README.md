@@ -33,3 +33,9 @@ If preparation is interrupted before `run.py` starts, recover with:
 
 The generated certificate and credentials are random, test-only, ignored by
 Git, and never printed. The production Compose file is not relaxed for E2E.
+
+The Playwright container follows the upstream trusted-E2E recommendation:
+the browser runs as the image's default root user with an init process and
+host IPC. It visits only the fixed Compose hostname, has no Docker socket,
+has no host bind mount, and is never used for crawling untrusted websites.
+Running as `pwuser` would require the upstream Chromium seccomp profile.

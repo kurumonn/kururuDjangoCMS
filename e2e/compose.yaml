@@ -54,6 +54,8 @@ services:
     profiles: ["e2e"]
     build:
       context: ./e2e
+    init: true
+    ipc: host
     environment:
       E2E_BASE_URL: https://e2e.local
       E2E_VIEWER_EMAIL: viewer@example.test

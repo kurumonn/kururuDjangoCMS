@@ -9,6 +9,4 @@ COPY playwright.config.ts ./
 COPY tsconfig.json ./
 COPY tests ./tests
 
-USER pwuser
-
 ENTRYPOINT ["npx", "playwright", "test"]
