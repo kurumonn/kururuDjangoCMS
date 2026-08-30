@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from django.test import SimpleTestCase
 
 MODULE = "config.settings.production"
+MIGRATION_TEST_PASSWORD = "test-only-migration-password"  # pragma: allowlist secret
 
 # 本番設定を import できる最小の環境変数。
 MINIMUM_ENV = {
@@ -114,7 +115,7 @@ class MissingSecretsTests(SimpleTestCase):
         with production_settings(
             APP_START_MODE="migrate",
             POSTGRES_MIGRATION_USER="kururucms_migrator",
-            POSTGRES_MIGRATION_PASSWORD="test-only-migration-password",
+            POSTGRES_MIGRATION_PASSWORD=MIGRATION_TEST_PASSWORD,
         ) as settings:
             database = settings.DATABASES["default"]
         self.assertEqual(database["USER"], "kururucms_migrator")
@@ -123,7 +124,7 @@ class MissingSecretsTests(SimpleTestCase):
         for name in ("POSTGRES_MIGRATION_USER", "POSTGRES_MIGRATION_PASSWORD"):
             credentials = {
                 "POSTGRES_MIGRATION_USER": "kururucms_migrator",
-                "POSTGRES_MIGRATION_PASSWORD": "test-only-migration-password",
+                "POSTGRES_MIGRATION_PASSWORD": MIGRATION_TEST_PASSWORD,
             }
             credentials[name] = None
             with self.subTest(name=name), self.assertRaises(RuntimeError) as caught:
