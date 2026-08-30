@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -51,6 +52,36 @@ def diagnostic_code(completed: subprocess.CompletedProcess[str]) -> str:
 
 def playwright_diagnostic(completed: subprocess.CompletedProcess[str]) -> str:
     output = (completed.stderr or "") + "\n" + (completed.stdout or "")
+    try:
+        report = json.loads(completed.stdout or "")
+        checkpoints: list[str] = []
+
+        def collect(value) -> None:
+            if isinstance(value, dict):
+                if (
+                    value.get("type") == "checkpoint"
+                    and value.get("description")
+                    in {
+                        "navigate-admin",
+                        "wait-login",
+                        "submit-login",
+                        "actions-hidden",
+                        "forged-post",
+                        "form-still-visible",
+                    }
+                ):
+                    checkpoints.append(value["description"])
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(report)
+        if checkpoints:
+            return f"checkpoint-{checkpoints[-1]}"
+    except (json.JSONDecodeError, TypeError):
+        pass
     for checkpoint in (
         "navigate-admin",
         "wait-login",

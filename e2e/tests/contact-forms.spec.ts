@@ -5,11 +5,16 @@ const adminPath = "/admin/contact_forms/contactform/";
 
 test("@authorization view-only staff cannot archive or duplicate forms", async ({
   page,
-}) => {
+}, testInfo) => {
   let checkpoint = "navigate-admin";
+  const mark = (next: string) => {
+    checkpoint = next;
+    testInfo.annotations.push({ type: "checkpoint", description: next });
+  };
+  mark(checkpoint);
   try {
     await page.goto(`${adminPath}`);
-    checkpoint = "wait-login";
+    mark("wait-login");
     await page.waitForURL(/\/accounts\/login\//);
     await page
       .locator('input[name="login"]')
@@ -17,16 +22,16 @@ test("@authorization view-only staff cannot archive or duplicate forms", async (
     await page
       .locator('input[name="password"]')
       .fill(process.env.E2E_VIEWER_PASSWORD || "");
-    checkpoint = "submit-login";
+    mark("submit-login");
     await page.getByRole("button", { name: /ログイン|Sign In/i }).click();
     await page.waitForURL(new RegExp(`${adminPath.replaceAll("/", "\\/")}`));
 
-    checkpoint = "actions-hidden";
+    mark("actions-hidden");
     const actions = page.locator('select[name="action"]');
     await expect(actions.locator('option[value="duplicate_forms"]')).toHaveCount(0);
     await expect(actions.locator('option[value="archive_forms"]')).toHaveCount(0);
 
-    checkpoint = "forged-post";
+    mark("forged-post");
     const csrf = await page
       .locator('input[name="csrfmiddlewaretoken"]')
       .first()
@@ -48,13 +53,10 @@ test("@authorization view-only staff cannot archive or duplicate forms", async (
     });
     expect([200, 302, 403]).toContain(forged.status());
 
-    checkpoint = "form-still-visible";
+    mark("form-still-visible");
     await page.reload();
     await expect(page.getByRole("link", { name: "E2Eお問い合わせ" })).toBeVisible();
   } catch (error) {
-    console.log(
-      `::error title=Playwright E2E checkpoint::test=authorization; checkpoint=${checkpoint}`,
-    );
     throw error;
   }
 });
