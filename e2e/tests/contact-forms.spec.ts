@@ -3,20 +3,31 @@ import { expect, test, type Page } from "@playwright/test";
 const articlePath = "/articles/e2e-contact-form/";
 const adminPath = "/admin/contact_forms/contactform/";
 
-async function loginViewOnlyStaff(page: Page) {
+async function openLogin(page: Page) {
   await page.goto(adminPath);
   await page.waitForURL(/\/accounts\/login\//);
-  await page
-    .locator('input[name="login"]')
-    .fill(process.env.E2E_VIEWER_EMAIL || "");
-  await page
-    .locator('input[name="password"]')
-    .fill(process.env.E2E_VIEWER_PASSWORD || "");
-  await page.getByRole("button", { name: /ログイン|Sign In/i }).click();
+  await expect(page.locator('input[name="login"]')).toBeVisible();
+  await expect(page.locator('input[name="password"]')).toBeVisible();
+}
+
+async function loginViewOnlyStaff(page: Page) {
+  await openLogin(page);
+  await page.locator('input[name="login"]').fill(
+    process.env.E2E_VIEWER_EMAIL || "",
+  );
+  const password = page.locator('input[name="password"]');
+  await password.fill(process.env.E2E_VIEWER_PASSWORD || "");
+  await password.press("Enter");
   await page.waitForURL(new RegExp(`${adminPath.replaceAll("/", "\\/")}`));
 }
 
-test("@authorization-login view-only staff enters through allauth", async ({
+test("@authorization-login-page admin redirects to the allauth login form", async ({
+  page,
+}) => {
+  await openLogin(page);
+});
+
+test("@authorization-login-submit view-only staff can enter the changelist", async ({
   page,
 }) => {
   await loginViewOnlyStaff(page);

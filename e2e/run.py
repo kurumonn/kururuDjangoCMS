@@ -190,7 +190,8 @@ def main() -> int:
         phase = "seed"
         django_script("/e2e/seed.py")
         for tag, label in (
-            ("@authorization-login", "login"),
+            ("@authorization-login-page", "login-page"),
+            ("@authorization-login-submit", "login-submit"),
             ("@authorization-actions", "actions"),
             ("@authorization-forged", "forged"),
         ):
