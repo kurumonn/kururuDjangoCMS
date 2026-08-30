@@ -183,11 +183,6 @@ SECRET_KEY = "django-insecure-dev-only-do-not-use-in-production"  # pragma: allo
 
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
 
-database_role_prefix = (
-    "POSTGRES_MIGRATION"
-    if os.environ.get("APP_START_MODE") == "migrate"
-    else "POSTGRES_APP"
-)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
@@ -259,8 +254,8 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": require("POSTGRES_DB"),
-        "USER": require(f"{database_role_prefix}_USER"),
-        "PASSWORD": require(f"{database_role_prefix}_PASSWORD"),
+        "USER": require("POSTGRES_USER"),
+        "PASSWORD": require("POSTGRES_PASSWORD"),
         "HOST": os.environ.get("POSTGRES_HOST", "db"),
         "PORT": os.environ.get("POSTGRES_PORT", "5432"),
         # 接続を使い回す秒数。0 だとリクエストごとに接続し直す。
@@ -509,17 +504,12 @@ python - <<'PY'
 import os, sys, time
 import psycopg
 
-role_prefix = (
-    "POSTGRES_MIGRATION"
-    if os.environ.get("APP_START_MODE") == "migrate"
-    else "POSTGRES_APP"
-)
 dsn = (
     f"host={os.environ.get('POSTGRES_HOST', 'db')} "
     f"port={os.environ.get('POSTGRES_PORT', '5432')} "
     f"dbname={os.environ['POSTGRES_DB']} "
-    f"user={os.environ[f'{role_prefix}_USER']} "
-    f"password={os.environ[f'{role_prefix}_PASSWORD']}"
+    f"user={os.environ['POSTGRES_USER']} "
+    f"password={os.environ['POSTGRES_PASSWORD']}"
 )
 
 deadline = time.time() + 60
@@ -551,18 +541,15 @@ exec "$@"
 
 ### 4.6 compose.yaml
 
-2026年8月のセキュリティ更新では、PostgreSQLの資格情報を管理者、
-マイグレーション所有者、Web/worker用DML利用者の3つへ分離しました。
-下記は要点だけの抜粋です。実際のイメージはタグだけでなくdigestまで固定します。
-
 ```yaml
 services:
   db:
-    image: postgres:17-alpine@sha256:<確認済みdigest>
+    image: postgres:17-alpine
     restart: unless-stopped
-    env_file:
-      - .env
-      - .env.db-admin
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     # ポートを外へ出さない。
@@ -573,30 +560,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-  db_role_provision:
-    image: postgres:17-alpine@sha256:<確認済みdigest>
-    restart: "no"
-    env_file:
-      - .env
-      - .env.db-migration
-      - .env.db-admin
-    command: ["/bin/sh", "/scripts/provision_db_role.sh"]
-    depends_on:
-      db:
-        condition: service_healthy
-
-  migrate:
-    build: .
-    restart: "no"
-    env_file:
-      - .env
-      - .env.db-migration
-    environment:
-      APP_START_MODE: "migrate"
-    depends_on:
-      db_role_provision:
-        condition: service_completed_successfully
 
   redis:
     image: redis:8-alpine
@@ -616,8 +579,8 @@ services:
     env_file:
       - .env
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
