@@ -43,18 +43,18 @@
   {# 10日目で導入する Content-Security-Policy が緩まずに済む。 #}
   <link rel="stylesheet" href="{% static 'css/site.css' %}">
   <link rel="stylesheet" href="{% static active_theme.css_path %}">
-  {# サイト設定で決めたアクセント色だけを差し込む。            #}
-  {# 値は #rrggbb 形式に検証済みなので、CSS へ注入されない。    #}
+  {# サイト設定で決めたアクセント色だけを差し込む。                        #}
+  {# 値は #rrggbb 形式に検証済みなので、CSS へ注入されない。                #}
+  {#                                                                       #}
+  {# 明暗を prefers-color-scheme で切り替えないのは、テーマ側の背景が       #}
+  {# 固定だから。OS設定で色だけ切り替えると、背景はテーマ・リンクはOS依存   #}
+  {# という食い違いが起き、実際にリンクが 2.3:1 まで落ちた。               #}
+  {# どちらのアクセント色を使うか、読める明るさか、はサーバー側で決める。   #}
   <style nonce="{{ request.csp_nonce }}">
     html[data-theme] {
-      --accent: {{ site_setting.accent_color }};
+      --accent: {{ theme_accent }};
       --accent-fg: {{ accent_foreground }};
-    }
-    @media (prefers-color-scheme: dark) {
-      html[data-theme] {
-        --accent: {{ site_setting.accent_color_dark }};
-        --accent-fg: {{ accent_foreground_dark }};
-      }
+      --link: {{ theme_link }};
     }
   </style>
 

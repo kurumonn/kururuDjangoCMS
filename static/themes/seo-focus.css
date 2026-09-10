@@ -1,9 +1,12 @@
 html[data-theme="seo-focus"] {
+  color-scheme: light;
   --bg: #ffffff;
   --surface: #ffffff;
-  --text: #111827;
+  --fg: #111827;
   --muted: #4b5563;
   --border: #d1d5db;
+  --danger: #b91c1c;
+  --success: #166534;
   font-size: 17px;
 }
 html[data-theme="seo-focus"] .container { max-width: 72rem; }

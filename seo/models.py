@@ -48,11 +48,19 @@ class SiteSetting(models.Model):
         verbose_name="既定のOG画像",
     )
 
+    # アクセント色は「背景として敷く色」。ボタンなどに使う。
+    # 本文中のリンクは、テーマの背景に対して読める明るさへ寄せた
+    # 別の色（--link）をサーバー側で計算して使う。
     accent_color = models.CharField(
-        "アクセント色", max_length=7, default="#2563eb", validators=[HEX_COLOR]
+        "アクセント色", max_length=7, default="#2563eb", validators=[HEX_COLOR],
+        help_text=(
+            "明るいテーマで使う色。ボタンの背景にはこの色をそのまま使い、"
+            "本文中のリンクはテーマの背景に対して読みにくい場合だけ明るさを自動調整します。"
+        ),
     )
     accent_color_dark = models.CharField(
-        "アクセント色（ダーク）", max_length=7, default="#60a5fa", validators=[HEX_COLOR]
+        "アクセント色（ダーク）", max_length=7, default="#60a5fa", validators=[HEX_COLOR],
+        help_text="Midnight などの暗いテーマで使う色。どちらを使うかはテーマの明暗で決まります。",
     )
     theme_key = models.CharField(
         "テーマ",

@@ -1,9 +1,12 @@
 html[data-theme="motion"] {
+  color-scheme: light;
   --bg: #f7f4ff;
   --surface: #ffffff;
-  --text: #25164a;
+  --fg: #25164a;
   --muted: #66568a;
   --border: #d9cff1;
+  --danger: #b91c1c;
+  --success: #166534;
 }
 html[data-theme="motion"][data-motion="enabled"] .article {
   animation: kururu-theme-enter 360ms ease-out both;
@@ -12,6 +15,8 @@ html[data-theme="motion"][data-motion="enabled"] .article {
   from { opacity: 0; transform: translateY(0.5rem); }
   to { opacity: 1; transform: none; }
 }
+/* 停止側は動かす側と「まったく同じセレクター」で書く。
+   html[data-theme="motion"] .article だけだと詳細度で負けて止まらない。 */
 @media (prefers-reduced-motion: reduce) {
-  html[data-theme="motion"] .article { animation: none; }
+  html[data-theme="motion"][data-motion="enabled"] .article { animation: none; }
 }

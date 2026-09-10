@@ -1,8 +1,11 @@
 html[data-theme="mint-candy"] {
+  color-scheme: light;
   --bg: #f0fff9;
   --surface: #ffffff;
-  --text: #173b35;
+  --fg: #173b35;
   --muted: #4e7069;
   --border: #b9ded4;
+  --danger: #b91c1c;
+  --success: #166534;
 }
 html[data-theme="mint-candy"] .btn { border-radius: 999px; }

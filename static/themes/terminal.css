@@ -2,8 +2,10 @@ html[data-theme="terminal"] {
   color-scheme: dark;
   --bg: #07110b;
   --surface: #0d1b12;
-  --text: #d9ffe2;
+  --fg: #d9ffe2;
   --muted: #8fc89c;
   --border: #285b35;
+  --danger: #f87171;
+  --success: #4ade80;
   font-family: ui-monospace, "Cascadia Code", monospace;
 }

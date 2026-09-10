@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from django.core.cache import cache
 
-from .contrast import readable_foreground
-from .models import SiteSetting
-from .themes import resolve_theme
+from .contrast import ensure_readable_text, readable_foreground
+from .models import HEX_COLOR, SiteSetting
+from .themes import DARK, resolve_theme
 
 SIDEBAR_CACHE_KEY = "seo:sidebar"
 SIDEBAR_CACHE_SECONDS = 60
+
+HEX_COLOR_PATTERN = HEX_COLOR.regex
+DEFAULT_ACCENT = "#2563eb"
 
 
 def get_site_setting(request) -> SiteSetting:
@@ -29,15 +32,39 @@ def get_site_setting(request) -> SiteSetting:
     return cached
 
 
+def theme_colors(setting) -> dict[str, str]:
+    """テーマの背景に合わせてアクセント色とリンク色を決める。
+
+    アクセント色は2種類（明るい背景用・暗い背景用）を管理画面で持つが、
+    どちらを使うかは **利用者のOS設定ではなくテーマの明暗** で決める。
+    テーマの背景は固定なので、OS設定で切り替えると背景と色が食い違う。
+
+    さらに、アクセント色は「背景として敷く色」であって、
+    そのまま本文中のリンク色に使えるとは限らない。
+    リンクはテーマの地色・カード地の上に置く文字なので、
+    読める明るさへ寄せた別の色（--link）を用意する。
+    """
+    theme = resolve_theme(setting.theme_key)
+    stored = setting.accent_color_dark if theme.scheme == DARK else setting.accent_color
+    # save() は full_clean() を呼ばないので、管理画面を通らない保存
+    # （シェル・データ移行・フィクスチャ）では検証済みでない値が入りうる。
+    # 色を組み立てられない値で全ページが 500 になるのは割に合わないので、
+    # 形式が違うものは既定値へ落とす。theme_key と同じ考え方。
+    accent = stored if HEX_COLOR_PATTERN.fullmatch(stored or "") else DEFAULT_ACCENT
+    return {
+        "active_theme": theme,
+        "theme_accent": accent,
+        # アクセント色を背景に敷いたときに載せる文字色（ボタンなど）。
+        "accent_foreground": readable_foreground(accent),
+        # テーマの背景の上に置くリンク文字の色。
+        "theme_link": ensure_readable_text(accent, theme.backgrounds),
+    }
+
+
 def site_settings(request):
     """サイト設定。"""
     setting = get_site_setting(request)
-    return {
-        "site_setting": setting,
-        "active_theme": resolve_theme(setting.theme_key),
-        "accent_foreground": readable_foreground(setting.accent_color),
-        "accent_foreground_dark": readable_foreground(setting.accent_color_dark),
-    }
+    return {"site_setting": setting, **theme_colors(setting)}
 
 
 def sidebar(request):

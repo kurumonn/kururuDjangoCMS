@@ -1,32 +1,43 @@
 /* KururuCMS の基本スタイル。
    外部フォント・外部CSSを読み込まない（CSP を厳格に保つため）。 */
 
+/* 配色の初期値。
+   実際の配色は必ずテーマCSS（static/themes/*.css）が上書きする。
+   ここは「テーマが読めなかったときでも読める」ための保険。
+
+   以前はここに @media (prefers-color-scheme: dark) の上書きを置いていたが、
+   テーマ側は明暗が固定なので、背景はテーマ・文字色はOS設定という
+   食い違いが起きた（Clean をOSダークで見ると本文が 1.17:1）。
+   明暗はテーマが決める、と一本化してある。 */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #ffffff;
   --fg: #1f2937;
   --muted: #6b7280;
   --border: #e5e7eb;
   --surface: #f9fafb;
+  /* --accent は「背景として敷く色」。文字を載せるときは --accent-fg と対にする。 */
   --accent: #2563eb;
   --accent-fg: #ffffff;
+  /* --link は「背景の上に置く文字の色」。テーマの背景に合わせてサーバー側で調整する。 */
+  --link: #1d4ed8;
   --danger: #b91c1c;
-  --success: #15803d;
+  --success: #166534;
   --radius: 10px;
   --maxw: 78ch;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --fg: #e5e7eb;
-    --muted: #9ca3af;
-    --border: #2a2f3a;
-    --surface: #161a21;
-    --accent: #60a5fa;
-    --accent-fg: #0f1115;
-    --danger: #f87171;
-    --success: #4ade80;
+/* 利用者の「動きを減らす」設定は、どのテーマよりも優先する。
+   詳細度で負けないよう !important を付ける。ここを弱いセレクターで書くと、
+   テーマ側の強いセレクターに負けて止まらない。 */
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme] *,
+  html[data-theme] *::before,
+  html[data-theme] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -87,7 +98,7 @@ body {
 }
 .nav-user { color: var(--muted); font-size: 0.9rem; }
 
-a { color: var(--accent); }
+a { color: var(--link); }
 
 /* 本文 */
 main { padding-block: 2rem 3rem; }
@@ -180,7 +191,7 @@ main { min-width: 0; }
   flex-wrap: wrap;
   gap: 0.4rem;
 }
-.breadcrumb li + li::before { content: "/"; margin-right: 0.4rem; color: var(--border); }
+.breadcrumb li + li::before { content: "/"; margin-right: 0.4rem; color: var(--muted); }
 .breadcrumb a { text-decoration: none; }
 
 /* フッター */
@@ -287,7 +298,7 @@ main { min-width: 0; }
 .btn--link {
   border: 0;
   background: none;
-  color: var(--accent);
+  color: var(--link);
   padding: 0;
   text-decoration: underline;
 }

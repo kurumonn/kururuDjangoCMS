@@ -1,7 +1,10 @@
 html[data-theme="clean"] {
+  color-scheme: light;
   --bg: #f7f8fb;
   --surface: #ffffff;
-  --text: #172033;
+  --fg: #172033;
   --muted: #5f6b7a;
   --border: #d9dee8;
+  --danger: #b91c1c;
+  --success: #166534;
 }

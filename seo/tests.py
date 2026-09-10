@@ -28,9 +28,16 @@ from blog.tests.factories import (
 from pages.models import Page
 
 from .admin import SiteSettingAdmin
-from .contrast import contrast_ratio, readable_foreground
+from .checks import read_static
+from .contrast import (
+    NORMAL_TEXT_CONTRAST,
+    contrast_ratio,
+    ensure_readable_text,
+    readable_foreground,
+)
 from .models import SiteSetting
-from .themes import THEMES
+from .theme_css import audit_reduced_motion, audit_theme, parse_theme_css
+from .themes import THEMES, resolve_theme
 
 
 class CacheClearingTestCase(TestCase):
@@ -138,6 +145,196 @@ class SiteSettingTests(CacheClearingTestCase):
         self.assertContains(response, 'data-motion="enabled"')
         self.assertContains(response, 'nonce="')
         self.assertContains(response, "--accent-fg: #000000")
+
+
+class ThemeColorContractTests(CacheClearingTestCase):
+    """テーマが「見えている色」として正しいかを見るテスト。
+
+    以前のテーマテストは data-theme 属性とCSSパスの出力しか見ていなかった。
+    そのため、テーマ側が --fg ではなく --text を定義していて
+    本文色がまったく反映されていない状態でも全部通っていた。
+    ここでは実際の色の値まで踏み込む。
+    """
+
+    def _rendered_variables(self, theme_key: str) -> dict[str, str]:
+        """base.html が差し込むインラインCSSから変数の値を取り出す。"""
+        setting = SiteSetting.load()
+        setting.theme_key = theme_key
+        setting.full_clean()
+        setting.save()
+        response = self.client.get(reverse("blog:article_list"))
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        return dict(re.findall(r"(--[a-z-]+):\s*(#[0-9a-fA-F]{3,6});", body))
+
+    def _theme_variables(self, theme) -> dict[str, str]:
+        css = read_static(theme.css_path)
+        self.assertIsNotNone(css, f"{theme.css_path} が見つかりません")
+        return parse_theme_css(css, theme.key).variables
+
+    def test_every_theme_css_satisfies_the_variable_contract(self):
+        for theme in THEMES:
+            with self.subTest(theme=theme.key):
+                self.assertEqual(audit_theme(theme, read_static(theme.css_path)), [])
+
+    def test_no_theme_declares_the_legacy_text_variable(self):
+        """--text は共通CSSが読まない。定義しても本文色は変わらない。"""
+        for theme in THEMES:
+            with self.subTest(theme=theme.key):
+                self.assertNotIn("--text", self._theme_variables(theme))
+
+    def test_body_text_meets_normal_text_contrast_on_every_theme(self):
+        for theme in THEMES:
+            variables = self._theme_variables(theme)
+            for name in ("--fg", "--muted", "--danger", "--success"):
+                for background in ("--bg", "--surface"):
+                    with self.subTest(theme=theme.key, color=name, on=background):
+                        self.assertGreaterEqual(
+                            contrast_ratio(variables[name], variables[background]),
+                            NORMAL_TEXT_CONTRAST,
+                        )
+
+    def test_link_colour_is_readable_on_the_active_theme(self):
+        """管理画面の既定アクセント色で、11テーマすべてのリンクが読めること。"""
+        for theme in THEMES:
+            with self.subTest(theme=theme.key):
+                variables = self._rendered_variables(theme.key)
+                for background in theme.backgrounds:
+                    self.assertGreaterEqual(
+                        contrast_ratio(variables["--link"], background),
+                        NORMAL_TEXT_CONTRAST,
+                    )
+
+    def test_accent_follows_the_theme_not_the_visitors_os(self):
+        """暗いテーマでは暗い背景用のアクセント色を使う。
+
+        OS の prefers-color-scheme で切り替えると、
+        テーマの背景と噛み合わずリンクが 2.3:1 まで落ちる。
+        """
+        setting = SiteSetting.load()
+        setting.accent_color = "#2563eb"
+        setting.accent_color_dark = "#60a5fa"
+        setting.save()
+
+        self.assertEqual(self._rendered_variables("midnight")["--accent"], "#60a5fa")
+        self.assertEqual(self._rendered_variables("clean")["--accent"], "#2563eb")
+
+    def test_unreadable_accent_is_adjusted_for_links_only(self):
+        """読めないアクセント色でも、リンクだけは読める色に寄せる。
+
+        ボタンは選んだ色を背景に敷いたままで、載せる文字色は
+        readable_foreground() が黒か白を選ぶので読める。
+        """
+        setting = SiteSetting.load()
+        setting.accent_color = "#ffe100"  # 明るい黄色。白地では 1.2:1 しかない。
+        setting.save()
+
+        variables = self._rendered_variables("clean")
+        self.assertEqual(variables["--accent"], "#ffe100")
+        self.assertNotEqual(variables["--link"], "#ffe100")
+        for background in resolve_theme("clean").backgrounds:
+            self.assertGreaterEqual(
+                contrast_ratio(variables["--link"], background), NORMAL_TEXT_CONTRAST
+            )
+        self.assertGreaterEqual(
+            contrast_ratio(variables["--accent"], variables["--accent-fg"]),
+            NORMAL_TEXT_CONTRAST,
+        )
+
+    def test_readable_accent_is_used_for_links_unchanged(self):
+        setting = SiteSetting.load()
+        setting.accent_color = "#2563eb"
+        setting.save()
+        self.assertEqual(self._rendered_variables("clean")["--link"], "#2563eb")
+
+    def test_invalid_stored_accent_falls_back_instead_of_breaking_every_page(self):
+        """save() は full_clean() を呼ばない。壊れた色でサイト全体を落とさない。"""
+        setting = SiteSetting.load()
+        setting.theme_key = "clean"
+        setting.save()
+        # update() は save() を通らないので、検証されていない値がそのまま入る。
+        SiteSetting.objects.filter(pk=setting.pk).update(accent_color="not-a-colour")
+        self.assertEqual(SiteSetting.load().accent_color, "not-a-colour")
+
+        response = self.client.get(reverse("blog:article_list"))
+        self.assertEqual(response.status_code, 200)
+        variables = dict(
+            re.findall(
+                r"(--[a-z-]+):\s*(#[0-9a-fA-F]{3,6});", response.content.decode()
+            )
+        )
+        self.assertEqual(variables["--accent"], "#2563eb")
+        self.assertGreaterEqual(
+            contrast_ratio(variables["--link"], "#f7f8fb"), NORMAL_TEXT_CONTRAST
+        )
+
+    def test_rendered_page_does_not_switch_colours_on_prefers_color_scheme(self):
+        """明暗はテーマが決める。差し込みCSSに配色の分岐を残さない。"""
+        setting = SiteSetting.load()
+        setting.theme_key = "midnight"
+        setting.save()
+        self.assertNotContains(
+            self.client.get(reverse("blog:article_list")), "prefers-color-scheme"
+        )
+
+
+class ReducedMotionTests(CacheClearingTestCase):
+    """「動きを減らす」設定が本当に効くかを見るテスト。
+
+    停止側のセレクターが動かす側より弱いと、CSSの詳細度で負けて止まらない。
+    実装は
+        html[data-theme="motion"][data-motion="enabled"] .article  (0,3,1) で動かし
+        html[data-theme="motion"] .article                          (0,2,1) で止める
+    となっていて、利用者が reduce を選んでもアニメーションが動き続けていた。
+    """
+
+    def test_theme_stop_rules_use_the_same_selector_as_the_animation(self):
+        for theme in THEMES:
+            with self.subTest(theme=theme.key):
+                self.assertEqual(audit_reduced_motion(read_static(theme.css_path)), [])
+
+    def test_motion_theme_stops_the_exact_selector_it_animates(self):
+        css = read_static("themes/motion.css")
+        enabling = 'html[data-theme="motion"][data-motion="enabled"] .article'
+        self.assertIn(f"{enabling} {{\n  animation: kururu-theme-enter", css)
+        reduce_block = re.search(
+            r"@media[^{]*prefers-reduced-motion[^{]*\{(.*?\})\s*\}", css, re.S
+        )
+        self.assertIsNotNone(reduce_block, "reduce ブロックがありません")
+        self.assertIn(enabling, reduce_block.group(1))
+
+    def test_site_css_keeps_the_global_killswitch(self):
+        """テーマ側の書き忘れに備えた、共通CSSの !important 付き停止ルール。"""
+        css = read_static("css/site.css")
+        self.assertIn("prefers-reduced-motion", css)
+        self.assertIn("animation-duration: 0.01ms !important", css)
+
+
+class EnsureReadableTextTests(TestCase):
+    def test_colour_that_already_passes_is_left_alone(self):
+        self.assertEqual(ensure_readable_text("#2563eb", ("#ffffff",)), "#2563eb")
+
+    def test_colour_is_darkened_until_it_passes_on_light_backgrounds(self):
+        adjusted = ensure_readable_text("#ffe100", ("#ffffff", "#f7f8fb"))
+        for background in ("#ffffff", "#f7f8fb"):
+            self.assertGreaterEqual(
+                contrast_ratio(adjusted, background), NORMAL_TEXT_CONTRAST
+            )
+
+    def test_colour_is_lightened_until_it_passes_on_dark_backgrounds(self):
+        adjusted = ensure_readable_text("#1e3a8a", ("#0b1020", "#141b2d"))
+        for background in ("#0b1020", "#141b2d"):
+            self.assertGreaterEqual(
+                contrast_ratio(adjusted, background), NORMAL_TEXT_CONTRAST
+            )
+
+    def test_result_is_always_a_six_digit_hex(self):
+        for color in ("#000", "#fff", "#ffe100", "#2563eb"):
+            with self.subTest(color=color):
+                self.assertRegex(
+                    ensure_readable_text(color, ("#ffffff", "#f7f8fb")),
+                    r"^#[0-9a-f]{6}$",
+                )
 
 
 class SeoFallbackTests(CacheClearingTestCase):
