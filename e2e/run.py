@@ -116,11 +116,18 @@ def playwright_diagnostic(completed: subprocess.CompletedProcess[str]) -> str:
 
 
 def run(*args: str, check: bool = True, capture: bool = False):
+    # docker compose も Playwright も UTF-8 で出力する。text=True の既定は
+    # 実行環境のロケールなので、日本語 Windows では読み取りスレッドが
+    # UnicodeDecodeError で落ち、捕捉した出力が空になる。
+    # 例外は別スレッドで起きるため実行自体は続き、
+    # 失敗したときだけ診断情報が丸ごと消えるという分かりにくい壊れ方をする。
     return subprocess.run(
         [*COMPOSE, *args],
         cwd=ROOT,
         check=check,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=capture,
     )
 
@@ -187,6 +194,15 @@ def main() -> int:
             raise subprocess.CalledProcessError(startup.returncode, startup.args)
         sys.stdout.write(startup.stdout)
         sys.stderr.write(startup.stderr)
+
+        # ブラウザ用イメージはテストを COPY して作る。ここで必ず作り直さないと、
+        # 手元での再実行がテストを書き換える前のイメージを黙って使い続ける。
+        phase = "browser-image"
+        image = run("build", "playwright", check=False, capture=True)
+        if image.returncode:
+            diagnostic = diagnostic_code(image)
+            raise subprocess.CalledProcessError(image.returncode, image.args)
+
         phase = "seed"
         django_script("/e2e/seed.py")
         for tag, label in (
@@ -215,6 +231,29 @@ def main() -> int:
                     authorization.returncode, authorization.args
                 )
             print(f"playwright_phase=authorization-{label} passed=1")
+        for tag, label in (
+            ("@form-identity", "form-identity"),
+            ("@invalid-input", "invalid-input"),
+            ("@reduced-motion", "reduced-motion"),
+        ):
+            phase = f"browser-regression-{label}"
+            regression = run(
+                "run",
+                "--rm",
+                "playwright",
+                "--reporter=json",
+                "--grep",
+                tag,
+                check=False,
+                capture=True,
+            )
+            if regression.returncode:
+                diagnostic = playwright_diagnostic(regression)
+                raise subprocess.CalledProcessError(
+                    regression.returncode, regression.args
+                )
+            print(f"playwright_phase=regression-{label} passed=1")
+
         phase = "browser-enqueue"
         enqueue = run(
             "run",
@@ -254,7 +293,7 @@ def main() -> int:
         wait_for_state("delivered")
         phase = "maintenance"
         wait_for_state("maintenance")
-        print("docker_e2e=passed tests=3")
+        print("docker_e2e=passed journeys=3 regression_checks=3")
         return 0
     except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
         failed = True

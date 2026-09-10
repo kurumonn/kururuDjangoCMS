@@ -10,6 +10,7 @@ from django.contrib.auth.models import Permission
 from django.utils import timezone
 
 from blog.models import Article, Category
+from seo.models import SiteSetting
 from cms_plugins.models import PluginActivation
 from contact_forms.models import (
     ContactField,
@@ -47,7 +48,12 @@ EmailAddress.objects.update_or_create(
 settings = ContactPluginSetting.load()
 settings.default_retention_days = 7
 settings.minimum_fill_seconds = 2
-settings.save(update_fields=["default_retention_days", "minimum_fill_seconds"])
+# レート制限は IP ごとの積み上げなので、既定の5回だとブラウザ検査を
+# 1つ足しただけで無関係な検査が落ちる。ここでは制限そのものを試さない。
+settings.rate_limit = 20
+settings.save(
+    update_fields=["default_retention_days", "minimum_fill_seconds", "rate_limit"]
+)
 
 contact_form, _ = ContactForm.objects.update_or_create(
     slug="e2e-contact",
@@ -114,6 +120,38 @@ Article.objects.update_or_create(
         "noindex": True,
     },
 )
+
+# 同じフォームを2つ置いた記事。HTML の id 衝突と、入力エラー時の
+# 再表示先を確かめるために使う。既存の受付〜配送の導線へ影響させたくないので
+# 別記事にしてある。
+Article.objects.update_or_create(
+    slug="e2e-contact-form-twice",
+    defaults={
+        "title": "E2E問い合わせフォーム（2つ配置）",
+        "author": viewer,
+        "category": category,
+        "status": Article.Status.PUBLISHED,
+        "published_at": timezone.now() - timedelta(minutes=1),
+        "blocks": [
+            {
+                "type": "kururu_forms.contact_form",
+                "data": {"form_id": contact_form.pk},
+            },
+            {
+                "type": "kururu_forms.contact_form",
+                "data": {"form_id": contact_form.pk},
+            },
+        ],
+        "noindex": True,
+    },
+)
+
+# アニメーション付きテーマを選び、管理画面側も有効にしておく。
+# 「動きを減らす」を優先できているかは、この状態でしか確かめられない。
+site_setting = SiteSetting.load()
+site_setting.theme_key = "motion"
+site_setting.enable_motion = True
+site_setting.save(update_fields=["theme_key", "enable_motion"])
 
 ContactSubmission.objects.filter(
     form=contact_form, page_path="/e2e-expired/"

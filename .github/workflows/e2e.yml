@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: kurumonn/kururuDjangoCMS_contact_forms
-          ref: 09e9cc04aa29f8b29a450c2a0822d5eefed25075  # pragma: allowlist secret
+          ref: daf2e36f3ef6f2ad334f2b9c6054dca1e58e70c6  # pragma: allowlist secret
           path: e2e/plugin-src
 
       - name: Set up Python
